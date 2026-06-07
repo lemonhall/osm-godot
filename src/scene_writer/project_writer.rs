@@ -26,6 +26,17 @@ pub fn write_project_file(output_dir: &Path, project_name: &str) -> io::Result<(
     writeln!(f)?;
     writeln!(f, "compatibility/default_parent_skeleton_in_mesh_instance_3d=true")?;
     writeln!(f)?;
+    writeln!(f, "[input]")?;
+    writeln!(f)?;
+    write_key_action(&mut f, "move_forward", 87)?;
+    write_key_action(&mut f, "move_backward", 83)?;
+    write_key_action(&mut f, "move_left", 65)?;
+    write_key_action(&mut f, "move_right", 68)?;
+    write_key_action(&mut f, "jump", 32)?;
+    write_key_action(&mut f, "descend", 4194326)?;
+    write_key_action(&mut f, "sprint", 4194325)?;
+    write_key_action(&mut f, "mouse_capture_toggle", 4194305)?;
+    writeln!(f)?;
     writeln!(f, "[rendering]")?;
     writeln!(f)?;
     writeln!(f, "environment/defaults/default_environment=\"res://default_environment.tres\"")?;
@@ -34,6 +45,15 @@ pub fn write_project_file(output_dir: &Path, project_name: &str) -> io::Result<(
     writeln!(f)?;
     writeln!(f, "enabled=PackedStringArray()")?;
 
+    Ok(())
+}
+
+fn write_key_action(f: &mut fs::File, name: &str, physical_keycode: u32) -> io::Result<()> {
+    writeln!(f, "{name}={{")?;
+    writeln!(f, "\"deadzone\": 0.5,")?;
+    writeln!(f, "\"events\": [Object(InputEventKey,\"resource_local_to_scene\":false,\"resource_name\":\"\",\"device\":-1,\"window_id\":0,\"alt_pressed\":false,\"shift_pressed\":false,\"ctrl_pressed\":false,\"meta_pressed\":false,\"pressed\":false,\"keycode\":0,\"physical_keycode\":{physical_keycode},\"key_label\":0,\"unicode\":0,\"location\":0,\"echo\":false,\"script\":null)")?;
+    writeln!(f, "]")?;
+    writeln!(f, "}}")?;
     Ok(())
 }
 
@@ -88,5 +108,21 @@ mod tests {
         let project = std::fs::read_to_string(tmp.path().join("project.godot")).unwrap();
         assert!(project.contains("config/features=PackedStringArray(\"4.6\", \"Forward Plus\")"));
         assert!(!project.contains("\"4.3\""));
+    }
+
+    #[test]
+    fn project_file_defines_fps_input_actions() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_project_file(tmp.path(), "Test World").unwrap();
+
+        let project = std::fs::read_to_string(tmp.path().join("project.godot")).unwrap();
+        assert!(project.contains("[input]"));
+        assert!(project.contains("move_forward="));
+        assert!(project.contains("move_backward="));
+        assert!(project.contains("move_left="));
+        assert!(project.contains("move_right="));
+        assert!(project.contains("jump="));
+        assert!(project.contains("mouse_capture_toggle="));
     }
 }

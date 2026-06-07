@@ -21,7 +21,7 @@ pub mod tscn_writer;
 
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::ground::Ground;
-use chunk_grid::{ChunkGrid, SceneElement};
+use chunk_grid::ChunkGrid;
 use geometry::MeshData;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -122,12 +122,15 @@ impl SceneWriter {
 
         let scenes_dir = self.output_dir.join("scenes");
         let materials_dir = self.output_dir.join("materials");
+        let scripts_dir = self.output_dir.join("scripts");
 
         fs::create_dir_all(&scenes_dir)?;
         fs::create_dir_all(&materials_dir)?;
+        fs::create_dir_all(&scripts_dir)?;
 
         // Write materials
         tres_writer::write_all_materials(&materials_dir)?;
+        self.write_fps_player_script(&scripts_dir)?;
 
         // Write each chunk scene
         let mut non_empty_count = 0u64;
@@ -176,10 +179,12 @@ impl SceneWriter {
             .filter(|c| !self.chunk_grid.chunks[c].elements.is_empty())
             .collect();
 
-        // load_steps = N ext_resources + 1 Environment sub_resource
-        let load_steps = non_empty.len() as u32 + 1;
+        // load_steps = chunk PackedScenes + player script + environment + capsule shape.
+        let load_steps = non_empty.len() as u32 + 3;
         writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
         writeln!(f)?;
+
+        writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
 
         // Ext resources: each chunk PackedScene
         let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
@@ -199,6 +204,11 @@ impl SceneWriter {
         writeln!(f, "ambient_source = 3")?; // Color + Sky
         writeln!(f)?;
 
+        writeln!(f, "[sub_resource type=\"CapsuleShape3D\" id=\"2\"]")?;
+        writeln!(f, "radius = 0.35")?;
+        writeln!(f, "height = 1.8")?;
+        writeln!(f)?;
+
         // Root
         writeln!(f, "[node name=\"World\" type=\"Node3D\"]")?;
         writeln!(f)?;
@@ -214,20 +224,26 @@ impl SceneWriter {
         writeln!(f, "shadow_enabled = true")?;
         writeln!(f)?;
 
-        // Camera3D
         let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32 * 0.5 * self.godot_scale;
         let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32 * 0.5 * self.godot_scale;
         let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32 * self.godot_scale;
         let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
         let span = span_x.max(span_z).max(1.0);
-        let cam_y = (span * 0.75).clamp(80.0, 600.0);
-        let cam_z = world_cz + (span * 0.85).clamp(60.0, 500.0);
-        let camera = look_at_transform(
-            (world_cx, cam_y, cam_z),
-            (world_cx, 0.0, world_cz),
-        );
-        writeln!(f, "[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]")?;
-        write_transform3d(&mut f, camera)?;
+
+        // Player starts above the south side of the generated bounds, facing into the city.
+        let player_y = (span * 0.08).clamp(10.0, 45.0);
+        let player_z = world_cz + (span * 0.35).clamp(20.0, 120.0);
+        writeln!(f, "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]")?;
+        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {world_cx:.4}, {player_y:.4}, {player_z:.4})")?;
+        writeln!(f, "script = ExtResource(\"player_script\")")?;
+        writeln!(f)?;
+
+        writeln!(f, "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"Player\"]")?;
+        writeln!(f, "shape = SubResource(\"2\")")?;
+        writeln!(f)?;
+
+        writeln!(f, "[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]")?;
+        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 0.9781, -0.2079, 0, 0.2079, 0.9781, 0, 1.6, 0)")?;
         writeln!(f, "current = true")?;
         writeln!(f, "far = 10000.0")?;
         writeln!(f)?;
@@ -244,11 +260,55 @@ impl SceneWriter {
             let (min_x, min_z, _, _) = chunk.world_bounds;
             let gx = min_x as f32 * self.godot_scale;
             let gz = -(min_z as f32) * self.godot_scale;
-            writeln!(f, "[node name=\"{cname}\" type=\"Node3D\" parent=\"{chunks_group}\"]")?;
+            writeln!(f, "[node name=\"{cname}\" parent=\"{chunks_group}\" instance=ExtResource(\"{eid}\")]")?;
             writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {gx}, 0, {gz})")?;
-            writeln!(f, "instance = ExtResource(\"{eid}\")")?;
             writeln!(f)?;
         }
+
+        Ok(())
+    }
+
+    fn write_fps_player_script(&self, scripts_dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = scripts_dir.join("fps_player.gd");
+        let mut f = std::fs::File::create(&path)?;
+
+        writeln!(f, "extends CharacterBody3D")?;
+        writeln!(f)?;
+        writeln!(f, "@export var move_speed := 14.0")?;
+        writeln!(f, "@export var sprint_multiplier := 2.0")?;
+        writeln!(f, "@export var mouse_sensitivity := 0.0025")?;
+        writeln!(f)?;
+        writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
+        writeln!(f)?;
+        writeln!(f, "func _ready() -> void:")?;
+        writeln!(f, "\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
+        writeln!(f)?;
+        writeln!(f, "func _unhandled_input(event: InputEvent) -> void:")?;
+        writeln!(f, "\tif event.is_action_pressed(\"mouse_capture_toggle\"):")?;
+        writeln!(f, "\t\tif Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
+        writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)")?;
+        writeln!(f, "\t\telse:")?;
+        writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
+        writeln!(f, "\tif event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
+        writeln!(f, "\t\trotate_y(-event.relative.x * mouse_sensitivity)")?;
+        writeln!(f, "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)")?;
+        writeln!(f, "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))")?;
+        writeln!(f)?;
+        writeln!(f, "func _physics_process(_delta: float) -> void:")?;
+        writeln!(f, "\tvar input_dir := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_backward\")")?;
+        writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
+        writeln!(f, "\tvar vertical := 0.0")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"jump\"):")?;
+        writeln!(f, "\t\tvertical += 1.0")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"descend\"):")?;
+        writeln!(f, "\t\tvertical -= 1.0")?;
+        writeln!(f, "\tvar speed := move_speed")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"sprint\"):")?;
+        writeln!(f, "\t\tspeed *= sprint_multiplier")?;
+        writeln!(f, "\tvelocity = Vector3(direction.x * speed, vertical * speed, direction.z * speed)")?;
+        writeln!(f, "\tmove_and_slide()")?;
 
         Ok(())
     }
@@ -268,63 +328,21 @@ impl SceneWriter {
     }
 }
 
-fn look_at_transform(eye: (f32, f32, f32), target: (f32, f32, f32)) -> [f32; 12] {
-    let forward = normalize((target.0 - eye.0, target.1 - eye.1, target.2 - eye.2));
-    let up = (0.0, 1.0, 0.0);
-    let right = normalize(cross(forward, up));
-    let camera_up = cross(right, forward);
-    let back = (-forward.0, -forward.1, -forward.2);
-
-    [
-        right.0, right.1, right.2,
-        camera_up.0, camera_up.1, camera_up.2,
-        back.0, back.1, back.2,
-        eye.0, eye.1, eye.2,
-    ]
-}
-
-fn normalize(v: (f32, f32, f32)) -> (f32, f32, f32) {
-    let len = (v.0 * v.0 + v.1 * v.1 + v.2 * v.2).sqrt();
-    if len <= f32::EPSILON {
-        (0.0, 0.0, 1.0)
-    } else {
-        (v.0 / len, v.1 / len, v.2 / len)
-    }
-}
-
-fn cross(a: (f32, f32, f32), b: (f32, f32, f32)) -> (f32, f32, f32) {
-    (
-        a.1 * b.2 - a.2 * b.1,
-        a.2 * b.0 - a.0 * b.2,
-        a.0 * b.1 - a.1 * b.0,
-    )
-}
-
-fn write_transform3d(f: &mut std::fs::File, m: [f32; 12]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    write!(f, "transform = Transform3D(")?;
-    for (i, v) in m.iter().enumerate() {
-        if i > 0 {
-            write!(f, ", ")?;
-        }
-        if v.fract() == 0.0 {
-            write!(f, "{}", *v as i32)?;
-        } else {
-            write!(f, "{v:.4}")?;
-        }
-    }
-    writeln!(f, ")")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::coordinate_system::cartesian::XZBBox;
     use crate::ground::Ground;
+    use crate::scene_writer::geometry::MeshData;
+
+    fn unit_mesh() -> MeshData {
+        let mut mesh = MeshData::new();
+        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
+        mesh
+    }
 
     #[test]
-    fn master_scene_has_current_camera_for_run_mode() {
+    fn master_scene_has_current_player_camera_for_run_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let ground = Arc::new(Ground::new_flat(0));
@@ -333,9 +351,9 @@ mod tests {
         scene.save_all().unwrap();
 
         let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]"));
         assert!(master.contains("current = true"));
-        assert!(!master.contains("Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 127.8, 150.0, -127.8)"));
+        assert!(!master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
     }
 
     #[test]
@@ -348,8 +366,47 @@ mod tests {
         scene.save_all().unwrap();
 
         let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"));
         assert!(master.contains("[node name=\"Chunks\" type=\"Node3D\" parent=\".\"]"));
         assert!(!master.contains("parent=\"World\""));
+    }
+
+    #[test]
+    fn master_scene_instances_chunk_scenes_on_node_declaration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.add_mesh(
+            "BuildingWall_1".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            10,
+            10,
+        );
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[node name=\"Chunk_0_0\" parent=\"Chunks\" instance=ExtResource("));
+        assert!(!master.contains("\ninstance = ExtResource("));
+    }
+
+    #[test]
+    fn master_scene_has_fps_player_with_current_camera() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]"));
+        assert!(master.contains("[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"));
+        assert!(master.contains("script = ExtResource(\"player_script\")"));
+        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]"));
+        assert!(master.contains("current = true"));
+        assert!(tmp.path().join("scripts").join("fps_player.gd").exists());
     }
 }
