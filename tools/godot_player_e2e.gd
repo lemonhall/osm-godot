@@ -1,0 +1,137 @@
+extends SceneTree
+
+const MIN_NORMAL_MOVE := 8.0
+const MIN_NOCLIP_MOVE := 0.5
+const MIN_MOUSE_YAW := 0.001
+
+func _initialize() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
+	var packed: PackedScene = load("res://scenes/master.tscn")
+	if packed == null:
+		_fail("failed_to_load_master")
+		return
+
+	var scene: Node = packed.instantiate()
+	get_root().add_child(scene)
+	current_scene = scene
+
+	for i in range(8):
+		await process_frame
+		await physics_frame
+
+	var player: CharacterBody3D = scene.get_node_or_null("Player")
+	if player == null:
+		_fail("missing_player")
+		return
+	var camera: Camera3D = player.get_node_or_null("Camera3D")
+	if camera == null:
+		_fail("missing_camera")
+		return
+
+	print("E2E player_initial=", player.global_position)
+	print("E2E mouse_mode_initial=", Input.get_mouse_mode())
+	print("E2E camera_current=", camera.current)
+	print("E2E collision_disabled_initial=", player.get_node("CollisionShape3D").disabled)
+	print("E2E floor_initial=", player.is_on_floor())
+	var spawn_position: Vector3 = player.global_position
+
+	var yaw_before: float = player.rotation.y
+	var pitch_before: float = camera.rotation.x
+	var motion := InputEventMouseMotion.new()
+	motion.relative = Vector2(320.0, -80.0)
+	Input.parse_input_event(motion)
+	await process_frame
+	await physics_frame
+	var mouse_yaw_delta: float = abs(player.rotation.y - yaw_before)
+	var mouse_pitch_delta: float = abs(camera.rotation.x - pitch_before)
+	print("E2E yaw_delta=", mouse_yaw_delta)
+	print("E2E pitch_delta=", mouse_pitch_delta)
+
+	var normal_move: float = await _measure_move(player, "normal_all_collision", spawn_position)
+	_set_named_collision_shapes(scene, "highway", true)
+	var no_road_move: float = await _measure_move(player, "normal_without_highway_collision", spawn_position)
+	_set_named_collision_shapes(scene, "highway", false)
+	_set_named_collision_shapes(scene, "terrain", true)
+	var no_terrain_move: float = await _measure_move(player, "normal_without_terrain_collision", spawn_position)
+	_set_named_collision_shapes(scene, "highway", true)
+	var no_walkable_move: float = await _measure_move(player, "normal_without_highway_or_terrain_collision", spawn_position)
+	_set_named_collision_shapes(scene, "highway", false)
+	_set_named_collision_shapes(scene, "terrain", false)
+
+	_press_key(KEY_V)
+	await process_frame
+	_release_key(KEY_V)
+	await process_frame
+
+	var noclip_move: float = await _measure_move(player, "noclip", spawn_position, 30)
+	print("E2E collision_disabled_after_v=", player.get_node("CollisionShape3D").disabled)
+
+	var failed := false
+	if mouse_yaw_delta < MIN_MOUSE_YAW:
+		push_error("E2E mouse did not rotate player")
+		failed = true
+	if normal_move < MIN_NORMAL_MOVE:
+		push_error("E2E normal mode did not move player")
+		failed = true
+	if noclip_move < MIN_NOCLIP_MOVE:
+		push_error("E2E noclip mode did not move player")
+		failed = true
+
+	quit(1 if failed else 0)
+
+func _measure_move(player: CharacterBody3D, label: String, spawn_position: Vector3, frames := 90) -> float:
+	player.global_position = spawn_position
+	player.velocity = Vector3.ZERO
+	for i in range(4):
+		await physics_frame
+	var start: Vector3 = player.global_position
+	_press_key(KEY_W)
+	for i in range(frames):
+		await physics_frame
+	_release_key(KEY_W)
+	await physics_frame
+	var finish: Vector3 = player.global_position
+	var xz_move := Vector2(finish.x - start.x, finish.z - start.z).length()
+	print("E2E ", label, "_start=", start)
+	print("E2E ", label, "_end=", finish)
+	print("E2E ", label, "_xz_move=", xz_move)
+	print("E2E ", label, "_floor=", player.is_on_floor())
+	print("E2E ", label, "_slide_count=", player.get_slide_collision_count())
+	for i in range(player.get_slide_collision_count()):
+		var collision := player.get_slide_collision(i)
+		print("E2E ", label, "_slide_", i, "_normal=", collision.get_normal(), " collider=", collision.get_collider().name)
+	return xz_move
+
+func _set_named_collision_shapes(root: Node, token: String, disabled: bool) -> void:
+	var count := _set_named_collision_shapes_recursive(root, token, disabled)
+	print("E2E collision_shapes_", token, "_disabled_", disabled, "=", count)
+
+func _set_named_collision_shapes_recursive(node: Node, token: String, disabled: bool) -> int:
+	var count := 0
+	var lower_name := node.name.to_lower()
+	if node is CollisionShape3D and node.get_parent() != null and node.get_parent().name.to_lower().contains(token):
+		node.disabled = disabled
+		count += 1
+	for child in node.get_children():
+		count += _set_named_collision_shapes_recursive(child, token, disabled)
+	return count
+
+func _press_key(key: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = key
+	event.physical_keycode = key
+	event.pressed = true
+	Input.parse_input_event(event)
+
+func _release_key(key: Key) -> void:
+	var event := InputEventKey.new()
+	event.keycode = key
+	event.physical_keycode = key
+	event.pressed = false
+	Input.parse_input_event(event)
+
+func _fail(reason: String) -> void:
+	push_error("E2E " + reason)
+	quit(1)

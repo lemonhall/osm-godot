@@ -186,12 +186,12 @@ impl SceneWriter {
             .collect();
 
         // load_steps = chunk PackedScenes + script/texture resources + scene subresources.
-        let load_steps = non_empty.len() as u32 + 8;
+        let load_steps = non_empty.len() as u32 + 9;
         writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
         writeln!(f)?;
 
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
-        writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.svg\" id=\"cloud_texture\"]")?;
+        writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]")?;
 
         // Ext resources: each chunk PackedScene
         let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
@@ -201,6 +201,14 @@ impl SceneWriter {
             chunk_eids.insert(*coord, eid);
         }
         writeln!(f)?;
+
+        let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32 * 0.5 * self.godot_scale;
+        let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32 * 0.5 * self.godot_scale;
+        let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32 * self.godot_scale;
+        let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
+        let span = span_x.max(span_z).max(1.0);
+        let floor_size_x = span_x.max(16.0) + 64.0;
+        let floor_size_z = span_z.max(16.0) + 64.0;
 
         // Environment
         writeln!(f, "[sub_resource type=\"ProceduralSkyMaterial\" id=\"1\"]")?;
@@ -241,6 +249,10 @@ impl SceneWriter {
         writeln!(f, "emission_energy_multiplier = 2.5")?;
         writeln!(f)?;
 
+        writeln!(f, "[sub_resource type=\"BoxShape3D\" id=\"7\"]")?;
+        writeln!(f, "size = Vector3({floor_size_x:.4}, 1.0, {floor_size_z:.4})")?;
+        writeln!(f)?;
+
         // Root
         writeln!(f, "[node name=\"World\" type=\"Node3D\"]")?;
         writeln!(f)?;
@@ -257,12 +269,6 @@ impl SceneWriter {
         writeln!(f, "light_energy = 2.4")?;
         writeln!(f, "shadow_enabled = true")?;
         writeln!(f)?;
-
-        let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32 * 0.5 * self.godot_scale;
-        let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32 * 0.5 * self.godot_scale;
-        let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32 * self.godot_scale;
-        let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
-        let span = span_x.max(span_z).max(1.0);
 
         let (player_x, player_y, player_z) = self.player_spawn_godot(world_cx, world_cz, span);
 
@@ -295,6 +301,14 @@ impl SceneWriter {
             writeln!(f, "texture = ExtResource(\"cloud_texture\")")?;
             writeln!(f)?;
         }
+
+        writeln!(f, "[node name=\"WorldFloor\" type=\"StaticBody3D\" parent=\".\"]")?;
+        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {world_cx:.4}, -0.5000, {world_cz:.4})")?;
+        writeln!(f)?;
+
+        writeln!(f, "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]")?;
+        writeln!(f, "shape = SubResource(\"7\")")?;
+        writeln!(f)?;
 
         writeln!(f, "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]")?;
         writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {player_x:.4}, {player_y:.4}, {player_z:.4})")?;
@@ -385,28 +399,18 @@ impl SceneWriter {
     }
 
     fn write_cloud_texture_asset(&self, assets_dir: &std::path::Path) -> std::io::Result<()> {
-        use std::io::Write;
+        let path = assets_dir.join("cloud_billboard.png");
+        let mut img = image::RgbaImage::from_pixel(512, 192, image::Rgba([0, 0, 0, 0]));
 
-        let path = assets_dir.join("cloud_billboard.svg");
-        let mut f = std::fs::File::create(&path)?;
+        draw_cloud_ellipse(&mut img, 262.0, 132.0, 164.0, 26.0, [215, 236, 255, 90]);
+        draw_cloud_ellipse(&mut img, 154.0, 112.0, 118.0, 42.0, [255, 255, 255, 235]);
+        draw_cloud_ellipse(&mut img, 260.0, 102.0, 132.0, 50.0, [255, 255, 255, 235]);
+        draw_cloud_ellipse(&mut img, 360.0, 118.0, 98.0, 38.0, [255, 255, 255, 235]);
+        draw_cloud_ellipse(&mut img, 210.0, 78.0, 48.0, 48.0, [255, 255, 255, 235]);
+        draw_cloud_ellipse(&mut img, 298.0, 70.0, 58.0, 58.0, [255, 255, 255, 235]);
+        draw_cloud_ellipse(&mut img, 364.0, 88.0, 44.0, 44.0, [255, 255, 255, 235]);
 
-        writeln!(
-            f,
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"192\" viewBox=\"0 0 512 192\">"
-        )?;
-        writeln!(f, "<rect width=\"512\" height=\"192\" fill=\"none\"/>")?;
-        writeln!(f, "<g fill=\"#ffffff\" fill-opacity=\"0.92\">")?;
-        writeln!(f, "<ellipse cx=\"154\" cy=\"112\" rx=\"118\" ry=\"42\"/>")?;
-        writeln!(f, "<ellipse cx=\"260\" cy=\"102\" rx=\"132\" ry=\"50\"/>")?;
-        writeln!(f, "<ellipse cx=\"360\" cy=\"118\" rx=\"98\" ry=\"38\"/>")?;
-        writeln!(f, "<circle cx=\"210\" cy=\"78\" r=\"48\"/>")?;
-        writeln!(f, "<circle cx=\"298\" cy=\"70\" r=\"58\"/>")?;
-        writeln!(f, "<circle cx=\"364\" cy=\"88\" r=\"44\"/>")?;
-        writeln!(f, "</g>")?;
-        writeln!(f, "<g fill=\"#d7ecff\" fill-opacity=\"0.35\">")?;
-        writeln!(f, "<ellipse cx=\"262\" cy=\"132\" rx=\"164\" ry=\"26\"/>")?;
-        writeln!(f, "</g>")?;
-        writeln!(f, "</svg>")?;
+        img.save(&path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         Ok(())
     }
@@ -426,25 +430,30 @@ impl SceneWriter {
         writeln!(f, "@export var mouse_sensitivity := 0.0025")?;
         writeln!(f, "var gravity := float(ProjectSettings.get_setting(\"physics/3d/default_gravity\"))")?;
         writeln!(f, "var noclip := false")?;
+        writeln!(f, "var look_enabled := true")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
         writeln!(f, "@onready var collision_shape: CollisionShape3D = $CollisionShape3D")?;
         writeln!(f)?;
         writeln!(f, "func _ready() -> void:")?;
+        writeln!(f, "\tlook_enabled = true")?;
         writeln!(f, "\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f)?;
         writeln!(f, "func _input(event: InputEvent) -> void:")?;
         writeln!(f, "\tif event.is_action_pressed(\"mouse_capture_toggle\"):")?;
-        writeln!(f, "\t\tif Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
+        writeln!(f, "\t\tif look_enabled:")?;
+        writeln!(f, "\t\t\tlook_enabled = false")?;
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)")?;
         writeln!(f, "\t\telse:")?;
+        writeln!(f, "\t\t\tlook_enabled = true")?;
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f, "\tif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:")?;
+        writeln!(f, "\t\tlook_enabled = true")?;
         writeln!(f, "\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f, "\tif event.is_action_pressed(\"noclip_toggle\") or _is_key_pressed_once(event, KEY_V):")?;
         writeln!(f, "\t\tnoclip = not noclip")?;
         writeln!(f, "\t\tcollision_shape.disabled = noclip")?;
-        writeln!(f, "\tif event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
+        writeln!(f, "\tif event is InputEventMouseMotion and look_enabled:")?;
         writeln!(f, "\t\trotate_y(-event.relative.x * mouse_sensitivity)")?;
         writeln!(f, "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)")?;
         writeln!(f, "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))")?;
@@ -577,8 +586,6 @@ impl SceneWriter {
         writeln!(f, "func _should_add_collision(material_name: String) -> bool:")?;
         writeln!(f, "\treturn (")?;
         writeln!(f, "\t\tmaterial_name.begins_with(\"terrain_\")")?;
-        writeln!(f, "\t\tor material_name.begins_with(\"road_\")")?;
-        writeln!(f, "\t\tor material_name == \"railway_gravel\"")?;
         writeln!(f, "\t)")?;
         writeln!(f)?;
         writeln!(f, "func _to_vec3_array(values: Array) -> PackedVector3Array:")?;
@@ -624,6 +631,39 @@ impl SceneWriter {
             .map(|c| c.elements.len())
             .sum()
     }
+}
+
+fn draw_cloud_ellipse(img: &mut image::RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, rgba: [u8; 4]) {
+    let min_x = ((cx - rx).floor() as i32).max(0) as u32;
+    let max_x = ((cx + rx).ceil() as i32).min(img.width() as i32 - 1) as u32;
+    let min_y = ((cy - ry).floor() as i32).max(0) as u32;
+    let max_y = ((cy + ry).ceil() as i32).min(img.height() as i32 - 1) as u32;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = (x as f32 + 0.5 - cx) / rx;
+            let dy = (y as f32 + 0.5 - cy) / ry;
+            if dx * dx + dy * dy <= 1.0 {
+                blend_pixel(img.get_pixel_mut(x, y), rgba);
+            }
+        }
+    }
+}
+
+fn blend_pixel(dst: &mut image::Rgba<u8>, src: [u8; 4]) {
+    let src_a = src[3] as f32 / 255.0;
+    let dst_a = dst[3] as f32 / 255.0;
+    let out_a = src_a + dst_a * (1.0 - src_a);
+    if out_a <= f32::EPSILON {
+        return;
+    }
+    for channel in 0..3 {
+        let src_c = src[channel] as f32 / 255.0;
+        let dst_c = dst[channel] as f32 / 255.0;
+        let out_c = (src_c * src_a + dst_c * dst_a * (1.0 - src_a)) / out_a;
+        dst[channel] = (out_c * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    dst[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
 }
 
 fn spawn_material_priority(material_type: MaterialType) -> Option<u8> {
@@ -718,6 +758,22 @@ mod tests {
     }
 
     #[test]
+    fn master_scene_has_world_floor_collision_for_stable_walking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[sub_resource type=\"BoxShape3D\" id=\"7\"]"));
+        assert!(master.contains("[node name=\"WorldFloor\" type=\"StaticBody3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]"));
+        assert!(master.contains("shape = SubResource(\"7\")"));
+    }
+
+    #[test]
     fn master_scene_has_bright_stylized_sky_sun_and_clouds() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
@@ -745,8 +801,8 @@ mod tests {
         scene.save_all().unwrap();
 
         let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(tmp.path().join("assets").join("cloud_billboard.svg").exists());
-        assert!(master.contains("[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.svg\" id=\"cloud_texture\"]"));
+        assert!(tmp.path().join("assets").join("cloud_billboard.png").exists());
+        assert!(master.contains("[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]"));
         assert!(master.contains("[node name=\"Cloud_0\" type=\"Sprite3D\" parent=\"Clouds\"]"));
         assert!(master.contains("texture = ExtResource(\"cloud_texture\")"));
         assert!(!master.contains("[node name=\"Cloud_0\" type=\"MeshInstance3D\" parent=\"Clouds\"]"));
@@ -847,6 +903,9 @@ mod tests {
         assert!(script.contains("func _input(event: InputEvent) -> void:"));
         assert!(script.contains("event is InputEventMouseButton"));
         assert!(script.contains("MOUSE_BUTTON_LEFT"));
+        assert!(script.contains("var look_enabled := true"));
+        assert!(script.contains("event is InputEventMouseMotion and look_enabled"));
+        assert!(!script.contains("Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED"));
         assert!(!script.contains("func _unhandled_input(event: InputEvent) -> void:"));
     }
 
@@ -883,7 +942,8 @@ mod tests {
         assert!(script.contains("mesh.create_trimesh_shape()"));
         assert!(script.contains("func _should_add_collision(material_name: String) -> bool:"));
         assert!(script.contains("material_name.begins_with(\"terrain_\")"));
-        assert!(script.contains("material_name.begins_with(\"road_\")"));
+        assert!(!script.contains("material_name.begins_with(\"road_\")"));
+        assert!(!script.contains("material_name == \"railway_gravel\""));
         assert!(!script.contains("material_name == \"building_wall\""));
     }
 }

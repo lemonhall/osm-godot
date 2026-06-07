@@ -55,22 +55,30 @@ cargo run --release -- \
 godot --path "./my_world"
 ```
 
-### 西安雁塔 10 倍示例
+### 西安雁塔 10 倍命令示例
 
 下面这个命令会生成一个比早期小样例约大 10 倍面积的西安雁塔区域工程。Windows/PowerShell 下如果需要代理访问 Overpass，先设置代理环境变量。
 
 ```powershell
-$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "34.210594,108.947432,34.226406,108.969568" --output-dir E:\tmp\osm-godot-xian-yanta-style-v7-collisionfix --chunk-size 128
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "34.210594,108.947432,34.226406,108.969568" --output-dir E:\tmp\osm-godot-xian-yanta-style --chunk-size 128
 ```
 
-最近一次生成结果：
+### 上海外滩示例
 
-- 输出工程：`E:\tmp\osm-godot-xian-yanta-style-v7-collisionfix\project.godot`
-- 范围：`34.210594,108.947432,34.226406,108.969568`
-- 建筑：`2052`
-- 道路：`2051`
-- 场景元素：`10655`
-- 非空区块：`224`
+这份外滩/陆家嘴区域工程已经用 Godot 4.6 headless 端到端跑过玩家移动、鼠标视角、noclip 和资源导入验证。
+
+```powershell
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v1-e2e --chunk-size 128
+```
+
+生成结果：
+
+- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v1-e2e\project.godot`
+- 范围：`31.2290,121.4820,31.2455,121.5100`
+- 建筑：`1105`
+- 道路：`1614`
+- 场景元素：`6804`
+- 非空区块：`315`
 
 ### 参数说明
 
@@ -93,7 +101,7 @@ output/
 ├── project.godot              # Godot 4.6 项目文件
 ├── default_environment.tres   # 默认环境
 ├── metadata.json              # 地理参考元数据
-├── assets/                    # 生成资源，例如 cloud_billboard.svg
+├── assets/                    # 生成资源，例如 cloud_billboard.png
 ├── materials/                 # toon-ish 材质资源
 │   ├── building_wall.tres
 │   ├── building_roof.tres
