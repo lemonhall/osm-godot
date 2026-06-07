@@ -21,7 +21,7 @@ pub mod tscn_writer;
 
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::ground::Ground;
-use chunk_grid::{ChunkGrid, SceneElement};
+use chunk_grid::{ChunkGrid, ElementMetadata, SceneElement};
 use geometry::MeshData;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -81,6 +81,25 @@ impl SceneWriter {
         world_x: i32,
         world_z: i32,
     ) {
+        self.add_mesh_with_metadata(
+            name,
+            mesh_data,
+            material,
+            world_x,
+            world_z,
+            ElementMetadata::new(),
+        );
+    }
+
+    pub fn add_mesh_with_metadata(
+        &mut self,
+        name: String,
+        mesh_data: MeshData,
+        material: MaterialType,
+        world_x: i32,
+        world_z: i32,
+        metadata: ElementMetadata,
+    ) {
         let ground_y = self.ground_y_at(world_x, world_z);
         self.chunk_grid.add_mesh_element(
             name,
@@ -90,6 +109,7 @@ impl SceneWriter {
             world_z,
             self.godot_scale,
             ground_y,
+            metadata,
         );
     }
 
@@ -709,6 +729,10 @@ impl SceneWriter {
         writeln!(f, "\tif material != null:")?;
         writeln!(f, "\t\tinstance.set_surface_override_material(0, material)")?;
         writeln!(f, "\tinstance.set_meta(\"osm_generated\", true)")?;
+        writeln!(
+            f,
+            "\t_apply_metadata(instance, element.get(\"metadata\", {{}}))"
+        )?;
         writeln!(f, "\tadd_child(instance)")?;
         writeln!(
             f,
@@ -734,6 +758,27 @@ impl SceneWriter {
             "\tbody.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner"
         )?;
         writeln!(f, "\tshape.owner = body.owner")?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "func _apply_metadata(node: Node, metadata: Variant) -> void:"
+        )?;
+        writeln!(f, "\tif typeof(metadata) != TYPE_DICTIONARY:")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tnode.set_meta(\"osm_metadata\", metadata)")?;
+        writeln!(f, "\tfor key in metadata.keys():")?;
+        writeln!(
+            f,
+            "\t\tnode.set_meta(StringName(_sanitize_meta_key(str(key))), metadata[key])"
+        )?;
+        writeln!(f)?;
+        writeln!(f, "func _sanitize_meta_key(key: String) -> String:")?;
+        writeln!(f, "\tvar out := key")?;
+        writeln!(f, "\tout = out.replace(\":\", \"_\")")?;
+        writeln!(f, "\tout = out.replace(\"-\", \"_\")")?;
+        writeln!(f, "\tout = out.replace(\".\", \"_\")")?;
+        writeln!(f, "\tout = out.replace(\" \", \"_\")")?;
+        writeln!(f, "\treturn out")?;
         writeln!(f)?;
         writeln!(
             f,
@@ -1178,6 +1223,10 @@ mod tests {
         assert!(script.contains("StaticBody3D.new()"));
         assert!(script.contains("CollisionShape3D.new()"));
         assert!(script.contains("mesh.create_trimesh_shape()"));
+        assert!(script.contains("func _apply_metadata(node: Node, metadata: Variant) -> void:"));
+        assert!(script.contains("node.set_meta(\"osm_metadata\", metadata)"));
+        assert!(script.contains("func _sanitize_meta_key(key: String) -> String:"));
+        assert!(script.contains("out = out.replace(\":\", \"_\")"));
         assert!(script.contains("func _should_add_collision(material_name: String) -> bool:"));
         assert!(script.contains("material_name.begins_with(\"terrain_\")"));
         assert!(!script.contains("material_name.begins_with(\"road_\")"));

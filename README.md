@@ -14,14 +14,14 @@ osm-godot 是一个 Rust 命令行工具，将 [OpenStreetMap](https://www.opens
 你选择一个经纬度矩形区域
         │
         ▼
-OpenStreetMap 数据 ──→ 建筑轮廓、道路、树木、水域
+OpenStreetMap 数据 ──→ 建筑轮廓、道路、树木、水域、名称/地址/道路等级
         +
 卫星高程数据 ──────→ 真实地形高度
         +
 ESA 地表分类 ──────→ 草地/森林/水域/建筑区
         │
         ▼
-Godot 项目输出 ──→ project.godot + .tscn 场景 + .tres 材质 + mesh_data JSON + 脚本
+Godot 项目输出 ──→ project.godot + .tscn 场景 + .tres 材质 + mesh_data JSON + OSM 元数据 + 脚本
 ```
 
 ## 快速开始
@@ -65,20 +65,40 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 
 ### 上海外滩示例
 
-这份外滩/陆家嘴区域工程已经用 Godot 4.6 headless 端到端跑过资源导入、独立道路场景加载、玩家移动、鼠标视角和 noclip 验证。
+这份外滩/陆家嘴区域工程使用 Arnis-style 建筑语法生成，已经用 Godot 4.6 headless 端到端跑过资源导入、独立道路场景加载、OSM 元数据注入、玩家移动、鼠标视角和 noclip 验证。
 
 ```powershell
-$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v3-roads-fixed --chunk-size 128
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v4-arnis-buildings --chunk-size 128
 ```
 
 生成结果：
 
-- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v3-roads-fixed\project.godot`
+- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v4-arnis-buildings\project.godot`
 - 范围：`31.2290,121.4820,31.2455,121.5100`
 - 建筑：`1105`
-- 道路：`1614`
-- 场景元素：`6804`
+- 道路：`1615`
+- 树木：`56`
+- 水域：`28`
+- 场景元素：`6981`
 - 非空区块：`315`
+
+### Arnis-style 建筑语法
+
+生成器会参考 Arnis 的思路，从 OSM 标签推断建筑用途，再用 Godot mesh 组合出更丰富的建筑外观：
+
+- 建筑分类：住宅、办公、酒店、工业、仓库、学校、医院、宗教、历史、高层、温室等。
+- 材质与颜色：优先读取 `building:material`、`building:colour`、`roof:material`、`roof:colour`，再回退到类别预设。
+- 屋顶语法：支持 `flat`、`gabled`、`hipped`、`skillion`、`pyramidal` 等屋顶；住宅缺省时会偏向坡屋顶。
+- 立面细节：按类别生成窗台、百叶、阳台、柱廊、横带、檐口、扶壁、竖向鳍片、玻璃幕墙和屋顶设备。
+
+### OSM 导航元数据
+
+为了后续做路名显示、建筑 POI、驾车 HUD 和路线规划，建筑和道路会把有限 OSM 元数据写入 `mesh_data/*.json`，Godot 加载后挂到节点 meta 上：
+
+- 原始字典：`node.get_meta("osm_metadata")`
+- 常用字段：`node.get_meta("osm_id")`、`node.get_meta("osm_kind")`、`node.get_meta("name")`
+- 冒号字段会生成安全 key：例如 `addr:housenumber` 可通过 `addr_housenumber` 读取，`building:levels` 可通过 `building_levels` 读取。
+- 道路节点会包含 `highway`、`road_width_m`、`name` 等字段；建筑节点会包含 `building`、`amenity`、`shop`、`tourism`、地址、高度或层数等存在于 OSM 的字段。
 
 ### 参数说明
 

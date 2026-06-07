@@ -20,10 +20,7 @@ const IGNORED_TAGS: &[&str] = &[
     "wikimedia_commons",
     "import_uuid",
     "import",
-    "old_name",
     "loc_name",
-    "official_name",
-    "alt_name",
     "operator",
     "phone",
     "fax",
@@ -42,10 +39,8 @@ const IGNORED_TAGS: &[&str] = &[
 
 // Tag-key prefixes Arnis never reads (localized names, addresses, regional import refs).
 const IGNORED_PREFIXES: &[&str] = &[
-    "addr:",
     "source",
     "name:",
-    "alt_name:",
     "contact:",
     "is_in:",
     "operator:",

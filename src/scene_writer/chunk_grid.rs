@@ -4,6 +4,7 @@
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::scene_writer::geometry::MeshData;
 use crate::scene_writer::tres_writer::MaterialType;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// Default chunk size in arnis block units. At godot_scale=0.5, 256 blocks = 128m.
@@ -22,6 +23,8 @@ pub struct Chunk {
     pub elements: Vec<SceneElement>,
 }
 
+pub type ElementMetadata = BTreeMap<String, String>;
+
 /// A rendered element within a chunk.
 pub enum SceneElement {
     /// A single mesh instance placed at a specific transform.
@@ -31,6 +34,7 @@ pub enum SceneElement {
         material_type: MaterialType,
         /// Column-major 3×4 transform matrix (12 floats).
         transform: [f32; 12],
+        metadata: ElementMetadata,
     },
     /// Instanced mesh: multiple placements sharing the same mesh data.
     /// Godot 4 uses MultiMeshInstance3D for efficient instancing.
@@ -138,13 +142,15 @@ impl ChunkGrid {
         world_z: i32,
         godot_scale: f32,
         ground_y: f32,
+        metadata: ElementMetadata,
     ) {
         if let Some(coord) = self.chunk_for(world_x, world_z) {
             let (min_x, min_z, _, _) = self.chunks[&coord].world_bounds;
             let gx = (world_x - min_x) as f32 * godot_scale;
             let gz = -((world_z - min_z) as f32) * godot_scale;
 
-            let transform = crate::scene_writer::tscn_writer::translation_transform(gx, ground_y, gz);
+            let transform =
+                crate::scene_writer::tscn_writer::translation_transform(gx, ground_y, gz);
 
             if let Some(chunk) = self.chunks.get_mut(&coord) {
                 chunk.elements.push(SceneElement::Mesh {
@@ -152,6 +158,7 @@ impl ChunkGrid {
                     mesh_data,
                     material_type,
                     transform,
+                    metadata,
                 });
             }
         }
@@ -224,6 +231,7 @@ mod tests {
             300,
             0.5,
             7.0,
+            ElementMetadata::new(),
         );
 
         let chunk = &grid.chunks[&ChunkCoord(1, 1)];

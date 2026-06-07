@@ -10,12 +10,20 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildingCategory {
     Residential,
+    Office,
+    Hotel,
     Commercial,
     Industrial,
+    Warehouse,
+    Farm,
+    School,
+    Hospital,
     Civic,
     Religious,
     HighRise,
+    Tower,
     Garage,
+    Shed,
     Greenhouse,
     Historic,
     Default,
@@ -32,6 +40,33 @@ pub enum WallDepthStyle {
     ReligiousButtress,
     SkyscraperFins,
     GlassCurtain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoofType {
+    Flat,
+    Gabled,
+    Hipped,
+    Skillion,
+    Pyramidal,
+    Dome,
+    Cone,
+    Onion,
+}
+
+impl RoofType {
+    fn as_tag(self) -> &'static str {
+        match self {
+            RoofType::Flat => "flat",
+            RoofType::Gabled => "gabled",
+            RoofType::Hipped => "hipped",
+            RoofType::Skillion => "skillion",
+            RoofType::Pyramidal => "pyramidal",
+            RoofType::Dome => "dome",
+            RoofType::Cone => "cone",
+            RoofType::Onion => "onion",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,6 +98,7 @@ pub fn classify_building_style(
 ) -> BuildingStyle {
     let building = tags.get("building").map(String::as_str).unwrap_or("yes");
     let amenity = tags.get("amenity").map(String::as_str).unwrap_or("");
+    let tourism = tags.get("tourism").map(String::as_str).unwrap_or("");
     let historic = tags.get("historic").map(String::as_str).unwrap_or("");
     let levels = tags
         .get("building:levels")
@@ -72,20 +108,17 @@ pub fn classify_building_style(
 
     let category = if height >= 36.0 || levels >= 12.0 {
         BuildingCategory::HighRise
+    } else if amenity == "hospital" || building == "hospital" {
+        BuildingCategory::Hospital
     } else if matches!(
         amenity,
-        "school" | "kindergarten" | "college" | "university" | "hospital"
+        "school" | "kindergarten" | "college" | "university"
     ) || matches!(
         building,
-        "school"
-            | "kindergarten"
-            | "college"
-            | "university"
-            | "hospital"
-            | "public"
-            | "government"
-            | "civic"
+        "school" | "kindergarten" | "college" | "university"
     ) {
+        BuildingCategory::School
+    } else if matches!(building, "public" | "government" | "civic") {
         BuildingCategory::Civic
     } else if amenity == "place_of_worship"
         || matches!(
@@ -96,16 +129,25 @@ pub fn classify_building_style(
         BuildingCategory::Religious
     } else if !historic.is_empty() || matches!(building, "castle" | "ruins" | "fort") {
         BuildingCategory::Historic
+    } else if matches!(building, "tower" | "water_tower" | "bell_tower") {
+        BuildingCategory::Tower
     } else if matches!(building, "garage" | "garages" | "carport") {
         BuildingCategory::Garage
+    } else if matches!(building, "shed" | "hut" | "cabin") {
+        BuildingCategory::Shed
     } else if matches!(building, "greenhouse" | "glasshouse") {
         BuildingCategory::Greenhouse
-    } else if matches!(building, "industrial" | "factory" | "warehouse" | "hangar") {
+    } else if matches!(building, "warehouse" | "hangar") {
+        BuildingCategory::Warehouse
+    } else if matches!(building, "farm" | "farm_auxiliary" | "barn" | "stable") {
+        BuildingCategory::Farm
+    } else if matches!(building, "industrial" | "factory") {
         BuildingCategory::Industrial
-    } else if matches!(
-        building,
-        "commercial" | "retail" | "office" | "hotel" | "supermarket"
-    ) {
+    } else if matches!(building, "office") {
+        BuildingCategory::Office
+    } else if building == "hotel" || tourism == "hotel" {
+        BuildingCategory::Hotel
+    } else if matches!(building, "commercial" | "retail" | "supermarket") {
         BuildingCategory::Commercial
     } else if matches!(
         building,
@@ -123,7 +165,7 @@ pub fn classify_building_style(
     };
 
     let variant = (element_id % 3) as f32;
-    match category {
+    let mut style = match category {
         BuildingCategory::Residential => BuildingStyle {
             category,
             wall_material: MaterialType::BuildingWallBrick,
@@ -136,6 +178,32 @@ pub fn classify_building_style(
             has_windows: true,
             trim_every_floor: false,
             parapet: false,
+        },
+        BuildingCategory::Office => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallCommercial,
+            roof_material: MaterialType::BuildingRoofDark,
+            depth_style: WallDepthStyle::ModernPillars,
+            window_spacing: 2.8,
+            window_width: 1.35,
+            window_height: 1.25,
+            door_width: 1.55,
+            has_windows: true,
+            trim_every_floor: true,
+            parapet: true,
+        },
+        BuildingCategory::Hotel => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallColorLight,
+            roof_material: MaterialType::BuildingRoofDark,
+            depth_style: WallDepthStyle::SubtlePilasters,
+            window_spacing: 2.7,
+            window_width: 1.05,
+            window_height: 1.25,
+            door_width: 1.7,
+            has_windows: true,
+            trim_every_floor: true,
+            parapet: true,
         },
         BuildingCategory::Commercial => BuildingStyle {
             category,
@@ -161,6 +229,58 @@ pub fn classify_building_style(
             door_width: 2.2,
             has_windows: true,
             trim_every_floor: false,
+            parapet: true,
+        },
+        BuildingCategory::Warehouse => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallConcrete,
+            roof_material: MaterialType::BuildingRoofMetal,
+            depth_style: WallDepthStyle::IndustrialBeams,
+            window_spacing: 5.2,
+            window_width: 1.9,
+            window_height: 0.75,
+            door_width: 3.0,
+            has_windows: true,
+            trim_every_floor: false,
+            parapet: true,
+        },
+        BuildingCategory::Farm => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallColorWarm,
+            roof_material: MaterialType::BuildingRoofTile,
+            depth_style: WallDepthStyle::SubtlePilasters,
+            window_spacing: 4.0,
+            window_width: 0.9,
+            window_height: 1.0,
+            door_width: 2.1,
+            has_windows: true,
+            trim_every_floor: false,
+            parapet: false,
+        },
+        BuildingCategory::School => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallConcrete,
+            roof_material: MaterialType::BuildingRoofDark,
+            depth_style: WallDepthStyle::InstitutionalBands,
+            window_spacing: 3.3,
+            window_width: 1.25,
+            window_height: 1.25,
+            door_width: 1.8,
+            has_windows: true,
+            trim_every_floor: true,
+            parapet: true,
+        },
+        BuildingCategory::Hospital => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallColorLight,
+            roof_material: MaterialType::BuildingRoofDark,
+            depth_style: WallDepthStyle::InstitutionalBands,
+            window_spacing: 3.2,
+            window_width: 1.25,
+            window_height: 1.25,
+            door_width: 1.9,
+            has_windows: true,
+            trim_every_floor: true,
             parapet: true,
         },
         BuildingCategory::Civic => BuildingStyle {
@@ -202,6 +322,19 @@ pub fn classify_building_style(
             trim_every_floor: true,
             parapet: true,
         },
+        BuildingCategory::Tower => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallStone,
+            roof_material: MaterialType::BuildingRoofDark,
+            depth_style: WallDepthStyle::HistoricOrnate,
+            window_spacing: 4.5,
+            window_width: 0.7,
+            window_height: 1.2,
+            door_width: 1.15,
+            has_windows: true,
+            trim_every_floor: false,
+            parapet: false,
+        },
         BuildingCategory::Garage => BuildingStyle {
             category,
             wall_material: MaterialType::BuildingWallConcrete,
@@ -211,6 +344,19 @@ pub fn classify_building_style(
             window_width: 0.8,
             window_height: 0.55,
             door_width: 2.6,
+            has_windows: false,
+            trim_every_floor: false,
+            parapet: false,
+        },
+        BuildingCategory::Shed => BuildingStyle {
+            category,
+            wall_material: MaterialType::BuildingWallColorWarm,
+            roof_material: MaterialType::BuildingRoofMetal,
+            depth_style: WallDepthStyle::None,
+            window_spacing: 5.0,
+            window_width: 0.55,
+            window_height: 0.5,
+            door_width: 1.6,
             has_windows: false,
             trim_every_floor: false,
             parapet: false,
@@ -254,6 +400,119 @@ pub fn classify_building_style(
             trim_every_floor: false,
             parapet: height > 9.0,
         },
+    };
+
+    if let Some(material) = wall_material_from_tags(tags) {
+        style.wall_material = material;
+    }
+    if let Some(material) = roof_material_from_tags(tags) {
+        style.roof_material = material;
+    }
+    style
+}
+
+fn wall_material_from_tags(tags: &HashMap<String, String>) -> Option<MaterialType> {
+    if let Some(material) = tags
+        .get("building:material")
+        .or_else(|| tags.get("facade:material"))
+        .map(|v| v.to_ascii_lowercase())
+    {
+        let mat = match material.as_str() {
+            "brick" | "bricks" => MaterialType::BuildingWallBrick,
+            "concrete" | "cement" | "plaster" => MaterialType::BuildingWallConcrete,
+            "glass" => MaterialType::BuildingWallGlass,
+            "stone" | "granite" | "marble" => MaterialType::BuildingWallStone,
+            "metal" | "steel" | "aluminium" | "aluminum" => MaterialType::BuildingWallCommercial,
+            "wood" | "timber" => MaterialType::BuildingWallColorWarm,
+            _ => return wall_colour_to_material(tags),
+        };
+        return Some(mat);
+    }
+    wall_colour_to_material(tags)
+}
+
+fn wall_colour_to_material(tags: &HashMap<String, String>) -> Option<MaterialType> {
+    let colour = tags
+        .get("building:colour")
+        .or_else(|| tags.get("building:color"))
+        .or_else(|| tags.get("facade:colour"))
+        .map(|v| v.to_ascii_lowercase())?;
+    match colour.as_str() {
+        "red" | "brown" | "#ff0000" | "#cc0000" => Some(MaterialType::BuildingWallColorRed),
+        "blue" | "#0000ff" | "#3366cc" => Some(MaterialType::BuildingWallColorBlue),
+        "white" | "light" | "cream" | "beige" | "#ffffff" => {
+            Some(MaterialType::BuildingWallColorLight)
+        }
+        "yellow" | "orange" | "tan" | "wood" => Some(MaterialType::BuildingWallColorWarm),
+        _ => None,
+    }
+}
+
+fn roof_material_from_tags(tags: &HashMap<String, String>) -> Option<MaterialType> {
+    if let Some(material) = tags.get("roof:material").map(|v| v.to_ascii_lowercase()) {
+        let mat = match material.as_str() {
+            "tile" | "tiles" | "clay" | "brick" => MaterialType::BuildingRoofTile,
+            "metal" | "steel" | "copper" | "zinc" => MaterialType::BuildingRoofMetal,
+            "concrete" | "gravel" | "tar_paper" => MaterialType::BuildingRoofDark,
+            _ => return roof_colour_to_material(tags),
+        };
+        return Some(mat);
+    }
+    roof_colour_to_material(tags)
+}
+
+fn roof_colour_to_material(tags: &HashMap<String, String>) -> Option<MaterialType> {
+    let colour = tags
+        .get("roof:colour")
+        .or_else(|| tags.get("roof:color"))
+        .map(|v| v.to_ascii_lowercase())?;
+    match colour.as_str() {
+        "red" | "orange" | "brown" => Some(MaterialType::BuildingRoofTile),
+        "black" | "grey" | "gray" | "dark" => Some(MaterialType::BuildingRoofDark),
+        "silver" | "metal" | "white" => Some(MaterialType::BuildingRoofMetal),
+        _ => None,
+    }
+}
+
+pub fn resolve_roof_type(tags: &HashMap<String, String>, style: &BuildingStyle) -> RoofType {
+    if let Some(raw) = tags
+        .get("roof:shape")
+        .or_else(|| tags.get("roof:type"))
+        .map(|s| s.trim().to_ascii_lowercase())
+    {
+        match raw.as_str() {
+            "flat" | "roof" | "yes" => return RoofType::Flat,
+            "gabled" | "gambrel" | "mansard" => return RoofType::Gabled,
+            "hipped" | "half-hipped" => return RoofType::Hipped,
+            "skillion" | "shed" | "lean_to" | "lean-to" => return RoofType::Skillion,
+            "pyramidal" | "pyramid" => return RoofType::Pyramidal,
+            "dome" => return RoofType::Dome,
+            "cone" | "conical" => return RoofType::Cone,
+            "onion" => return RoofType::Onion,
+            _ => {}
+        }
+    }
+
+    match style.category {
+        BuildingCategory::Residential | BuildingCategory::Farm | BuildingCategory::Shed => {
+            RoofType::Gabled
+        }
+        BuildingCategory::Religious | BuildingCategory::Tower => RoofType::Pyramidal,
+        BuildingCategory::Greenhouse => RoofType::Skillion,
+        _ => RoofType::Flat,
+    }
+}
+
+pub fn make_roof_mesh(polygon: &[(f32, f32)], height: f32, roof_type: RoofType) -> MeshData {
+    match roof_type {
+        RoofType::Flat => geometry::make_roof_flat(polygon, height),
+        RoofType::Gabled => geometry::make_roof_gabled(polygon, height, height + 3.0),
+        RoofType::Hipped => geometry::make_roof_hipped(polygon, height, height + 2.4),
+        RoofType::Skillion => geometry::make_roof_skillion(polygon, height, height + 2.2),
+        RoofType::Pyramidal => geometry::make_roof_pyramidal(polygon, height, height + 3.0),
+        RoofType::Dome | RoofType::Cone | RoofType::Onion => {
+            geometry::make_roof_pyramidal(polygon, height, height + 3.2)
+        }
     }
 }
 
@@ -281,14 +540,8 @@ pub fn generate_building(scene: &mut SceneWriter, way: &ProcessedWay, godot_scal
     // Centroids
     let (cx, cz) = centroid(&fp);
 
-    // Roof type
-    let roof_type = way
-        .tags
-        .get("roof:shape")
-        .or_else(|| way.tags.get("roof:type"))
-        .map(|s| s.as_str())
-        .unwrap_or("flat");
     let style = classify_building_style(&way.tags, height, way.id);
+    let roof_type = resolve_roof_type(&way.tags, &style);
 
     // Convert to local Godot coords
     let fp_local: Vec<(f32, f32)> = fp
@@ -300,66 +553,68 @@ pub fn generate_building(scene: &mut SceneWriter, way: &ProcessedWay, godot_scal
     let wall = geometry::make_wall_outline(&fp_local, height, 0.3);
 
     // ── Roof mesh ──
-    let roof = match roof_type {
-        "gabled" | "gambrel" | "mansard" | "pyramidal" | "hipped" | "dome" | "onion" => {
-            geometry::make_roof_gabled(&fp_local, height, height + 3.0)
-        }
-        _ => geometry::make_roof_flat(&fp_local, height),
-    };
+    let roof = make_roof_mesh(&fp_local, height, roof_type);
 
     let wx = cx.round() as i32;
     let wz = cz.round() as i32;
+    let metadata = super::osm_metadata(way.id, "building", &way.tags);
 
-    scene.add_mesh(
+    scene.add_mesh_with_metadata(
         format!("BuildingWall_{}", way.id),
         wall,
         style.wall_material,
         wx,
         wz,
+        metadata.clone(),
     );
-    scene.add_mesh(
+    scene.add_mesh_with_metadata(
         format!("BuildingRoof_{}", way.id),
         roof,
         style.roof_material,
         wx,
         wz,
+        metadata.clone(),
     );
 
-    let details = make_building_detail_meshes(&fp_local, height, roof_type, &style);
+    let details = make_building_detail_meshes(&fp_local, height, roof_type.as_tag(), &style);
     if details.windows.vertex_count() > 0 {
-        scene.add_mesh(
+        scene.add_mesh_with_metadata(
             format!("BuildingWindows_{}", way.id),
             details.windows,
             MaterialType::BuildingWindow,
             wx,
             wz,
+            metadata.clone(),
         );
     }
     if details.door.vertex_count() > 0 {
-        scene.add_mesh(
+        scene.add_mesh_with_metadata(
             format!("BuildingDoor_{}", way.id),
             details.door,
             MaterialType::BuildingDoor,
             wx,
             wz,
+            metadata.clone(),
         );
     }
     if details.trim.vertex_count() > 0 {
-        scene.add_mesh(
+        scene.add_mesh_with_metadata(
             format!("BuildingTrim_{}", way.id),
             details.trim,
             MaterialType::BuildingTrim,
             wx,
             wz,
+            metadata.clone(),
         );
     }
     if details.rooftop.vertex_count() > 0 {
-        scene.add_mesh(
+        scene.add_mesh_with_metadata(
             format!("BuildingRooftop_{}", way.id),
             details.rooftop,
             MaterialType::RooftopEquipment,
             wx,
             wz,
+            metadata,
         );
     }
 }
@@ -425,6 +680,16 @@ pub fn make_building_detail_meshes(
                         y1,
                         0.08,
                     );
+                    push_window_accents(
+                        &mut trim,
+                        style.category,
+                        (cx, cz),
+                        tangent,
+                        normal,
+                        style.window_width.min(len * 0.35),
+                        y0,
+                        y1,
+                    );
                 }
             }
 
@@ -487,11 +752,132 @@ pub fn make_building_detail_meshes(
         );
     }
 
+    let (min_x, max_x, min_z, max_z) = bbox(polygon);
+    match style.category {
+        BuildingCategory::Residential | BuildingCategory::Farm => {
+            let chimney = geometry::make_box(0.35, 1.0, 0.35);
+            rooftop.append(&chimney, (max_x - 0.8, height + 0.15, max_z - 0.8));
+        }
+        BuildingCategory::Hospital => {
+            let pad_long = geometry::make_box(((max_x - min_x) * 0.34).clamp(1.6, 4.0), 0.08, 0.42);
+            let pad_cross =
+                geometry::make_box(0.42, 0.09, ((max_z - min_z) * 0.34).clamp(1.6, 4.0));
+            let center = ((min_x + max_x) * 0.5, height + 0.7, (min_z + max_z) * 0.5);
+            rooftop.append(&pad_long, center);
+            rooftop.append(&pad_cross, center);
+        }
+        BuildingCategory::HighRise | BuildingCategory::Office | BuildingCategory::Hotel => {
+            let antenna = geometry::make_box(0.12, 2.0, 0.12);
+            rooftop.append(
+                &antenna,
+                ((min_x + max_x) * 0.5, height + 0.65, (min_z + max_z) * 0.5),
+            );
+        }
+        _ => {}
+    }
+
     BuildingDetailMeshes {
         windows,
         door,
         trim,
         rooftop,
+    }
+}
+
+fn push_window_accents(
+    trim: &mut MeshData,
+    category: BuildingCategory,
+    center_xz: (f32, f32),
+    tangent: (f32, f32),
+    normal: (f32, f32),
+    width: f32,
+    y0: f32,
+    y1: f32,
+) {
+    match category {
+        BuildingCategory::Residential | BuildingCategory::Farm => {
+            push_wall_panel(
+                trim,
+                center_xz,
+                tangent,
+                normal,
+                width + 0.34,
+                (y0 - 0.18).max(0.05),
+                (y0 - 0.05).max(0.08),
+                0.13,
+            );
+            for side in [-1.0_f32, 1.0] {
+                let shutter_center = (
+                    center_xz.0 + tangent.0 * side * (width * 0.5 + 0.16),
+                    center_xz.1 + tangent.1 * side * (width * 0.5 + 0.16),
+                );
+                push_wall_panel(trim, shutter_center, tangent, normal, 0.18, y0, y1, 0.12);
+            }
+        }
+        BuildingCategory::Hotel => {
+            push_wall_panel(
+                trim,
+                center_xz,
+                tangent,
+                normal,
+                width + 0.55,
+                (y0 - 0.28).max(0.05),
+                (y0 - 0.12).max(0.08),
+                0.18,
+            );
+        }
+        BuildingCategory::Historic | BuildingCategory::Tower => {
+            push_wall_panel(
+                trim,
+                center_xz,
+                tangent,
+                normal,
+                width + 0.55,
+                (y1 + 0.08).min(y1 + 0.16),
+                (y1 + 0.22).min(y1 + 0.30),
+                0.16,
+            );
+            push_wall_panel(
+                trim,
+                center_xz,
+                tangent,
+                normal,
+                width + 0.45,
+                (y0 - 0.18).max(0.05),
+                (y0 - 0.04).max(0.08),
+                0.16,
+            );
+            for side in [-1.0_f32, 1.0] {
+                let side_center = (
+                    center_xz.0 + tangent.0 * side * (width * 0.5 + 0.18),
+                    center_xz.1 + tangent.1 * side * (width * 0.5 + 0.18),
+                );
+                push_wall_panel(trim, side_center, tangent, normal, 0.20, y0, y1, 0.17);
+            }
+        }
+        BuildingCategory::Religious => {
+            push_wall_panel(
+                trim,
+                center_xz,
+                tangent,
+                normal,
+                width + 0.40,
+                (y1 + 0.06).min(y1 + 0.14),
+                (y1 + 0.22).min(y1 + 0.30),
+                0.18,
+            );
+            for side in [-1.0_f32, 1.0] {
+                let side_center = (
+                    center_xz.0 + tangent.0 * side * (width * 0.5 + 0.14),
+                    center_xz.1 + tangent.1 * side * (width * 0.5 + 0.14),
+                );
+                push_wall_panel(trim, side_center, tangent, normal, 0.18, y0, y1, 0.18);
+            }
+        }
+        BuildingCategory::HighRise | BuildingCategory::Office => {
+            push_wall_panel(trim, center_xz, tangent, normal, width + 0.22, y0, y1, 0.11);
+        }
+        _ => {}
     }
 }
 
@@ -728,7 +1114,7 @@ mod tests {
             9.0,
             11,
         );
-        assert_eq!(school.category, BuildingCategory::Civic);
+        assert_eq!(school.category, BuildingCategory::School);
         assert_eq!(school.wall_material, MaterialType::BuildingWallConcrete);
         assert_eq!(school.roof_material, MaterialType::BuildingRoofDark);
 
@@ -814,5 +1200,133 @@ mod tests {
 
         assert_eq!(highrise.depth_style, WallDepthStyle::SkyscraperFins);
         assert!(details.trim.vertex_count() >= 256);
+    }
+
+    #[test]
+    fn arnis_style_classification_splits_office_hotel_warehouse_and_hospital() {
+        let office = classify_building_style(&tags(&[("building", "office")]), 18.0, 31);
+        assert_eq!(office.category, BuildingCategory::Office);
+        assert_eq!(office.depth_style, WallDepthStyle::ModernPillars);
+
+        let hotel = classify_building_style(
+            &tags(&[("building", "hotel"), ("tourism", "hotel")]),
+            15.0,
+            32,
+        );
+        assert_eq!(hotel.category, BuildingCategory::Hotel);
+        assert!(hotel.parapet);
+
+        let warehouse = classify_building_style(&tags(&[("building", "warehouse")]), 9.0, 33);
+        assert_eq!(warehouse.category, BuildingCategory::Warehouse);
+        assert_eq!(warehouse.depth_style, WallDepthStyle::IndustrialBeams);
+
+        let hospital = classify_building_style(
+            &tags(&[("building", "hospital"), ("amenity", "hospital")]),
+            18.0,
+            34,
+        );
+        assert_eq!(hospital.category, BuildingCategory::Hospital);
+        assert_eq!(hospital.depth_style, WallDepthStyle::InstitutionalBands);
+    }
+
+    #[test]
+    fn arnis_style_material_tags_override_category_defaults() {
+        let brick = classify_building_style(
+            &tags(&[
+                ("building", "office"),
+                ("building:material", "brick"),
+                ("roof:material", "metal"),
+            ]),
+            12.0,
+            41,
+        );
+        assert_eq!(brick.wall_material, MaterialType::BuildingWallBrick);
+        assert_eq!(brick.roof_material, MaterialType::BuildingRoofMetal);
+
+        let blue = classify_building_style(
+            &tags(&[
+                ("building", "commercial"),
+                ("building:colour", "blue"),
+                ("roof:colour", "red"),
+            ]),
+            9.0,
+            42,
+        );
+        assert_eq!(blue.wall_material, MaterialType::BuildingWallColorBlue);
+        assert_eq!(blue.roof_material, MaterialType::BuildingRoofTile);
+    }
+
+    #[test]
+    fn roof_type_parsing_supports_arnis_shapes_and_house_default() {
+        let house = classify_building_style(&tags(&[("building", "house")]), 6.0, 51);
+        assert_eq!(
+            resolve_roof_type(&tags(&[("building", "house")]), &house),
+            RoofType::Gabled
+        );
+
+        let hipped = classify_building_style(
+            &tags(&[("building", "yes"), ("roof:shape", "hipped")]),
+            9.0,
+            52,
+        );
+        assert_eq!(
+            resolve_roof_type(
+                &tags(&[("building", "yes"), ("roof:shape", "hipped")]),
+                &hipped
+            ),
+            RoofType::Hipped
+        );
+
+        let footprint = vec![
+            (-5.0, -4.0),
+            (5.0, -4.0),
+            (5.0, 4.0),
+            (-5.0, 4.0),
+            (-5.0, -4.0),
+        ];
+        for roof in [
+            RoofType::Flat,
+            RoofType::Gabled,
+            RoofType::Hipped,
+            RoofType::Skillion,
+            RoofType::Pyramidal,
+        ] {
+            let mesh = make_roof_mesh(&footprint, 9.0, roof);
+            assert!(mesh.vertex_count() > 0, "{roof:?} should emit mesh");
+        }
+    }
+
+    #[test]
+    fn facade_grammar_adds_residential_historic_religious_and_hospital_features() {
+        let footprint = vec![
+            (-10.0, -6.0),
+            (10.0, -6.0),
+            (10.0, 6.0),
+            (-10.0, 6.0),
+            (-10.0, -6.0),
+        ];
+        let residential = classify_building_style(&tags(&[("building", "house")]), 9.0, 61);
+        let historic = classify_building_style(&tags(&[("historic", "yes")]), 12.0, 62);
+        let religious = classify_building_style(
+            &tags(&[("amenity", "place_of_worship"), ("building", "church")]),
+            15.0,
+            63,
+        );
+        let hospital = classify_building_style(
+            &tags(&[("amenity", "hospital"), ("building", "hospital")]),
+            18.0,
+            64,
+        );
+
+        let residential_details =
+            make_building_detail_meshes(&footprint, 9.0, "gabled", &residential);
+        let historic_details = make_building_detail_meshes(&footprint, 12.0, "flat", &historic);
+        let religious_details = make_building_detail_meshes(&footprint, 15.0, "gabled", &religious);
+        let hospital_details = make_building_detail_meshes(&footprint, 18.0, "flat", &hospital);
+
+        assert!(residential_details.trim.vertex_count() >= 160);
+        assert!(historic_details.trim.vertex_count() > residential_details.trim.vertex_count());
+        assert!(religious_details.trim.vertex_count() >= 192);
+        assert!(hospital_details.rooftop.vertex_count() >= 36);
     }
 }

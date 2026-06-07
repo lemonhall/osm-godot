@@ -91,11 +91,18 @@ fn write_chunk_mesh_data(chunk: &Chunk, mesh_data_dir: &Path) -> io::Result<()> 
                 mesh_data,
                 material_type,
                 transform,
+                metadata,
             } => {
                 if is_road_material(*material_type) {
                     continue;
                 }
-                elements.push(mesh_json(name, mesh_data, *material_type, *transform));
+                elements.push(mesh_json(
+                    name,
+                    mesh_data,
+                    *material_type,
+                    *transform,
+                    metadata,
+                ));
             }
             SceneElement::Instance {
                 name,
@@ -109,6 +116,7 @@ fn write_chunk_mesh_data(chunk: &Chunk, mesh_data_dir: &Path) -> io::Result<()> 
                         mesh_data,
                         *material_type,
                         transform_from_pos_rot(*pos, *rot),
+                        &Default::default(),
                     ));
                 }
             }
@@ -120,11 +128,7 @@ fn write_chunk_mesh_data(chunk: &Chunk, mesh_data_dir: &Path) -> io::Result<()> 
     fs::write(path, serde_json::to_string(&payload)?)
 }
 
-fn write_roads_mesh_data<'a, I>(
-    chunks: I,
-    mesh_data_dir: &Path,
-    godot_scale: f32,
-) -> io::Result<()>
+fn write_roads_mesh_data<'a, I>(chunks: I, mesh_data_dir: &Path, godot_scale: f32) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Chunk>,
 {
@@ -141,6 +145,7 @@ where
                 mesh_data,
                 material_type,
                 transform,
+                metadata,
             } = elem
             else {
                 continue;
@@ -152,7 +157,13 @@ where
             raised_transform[9] += chunk_x;
             raised_transform[10] += 0.08;
             raised_transform[11] += chunk_z;
-            elements.push(mesh_json(name, mesh_data, *material_type, raised_transform));
+            elements.push(mesh_json(
+                name,
+                mesh_data,
+                *material_type,
+                raised_transform,
+                metadata,
+            ));
         }
     }
 
@@ -175,11 +186,13 @@ fn mesh_json(
     mesh_data: &crate::scene_writer::geometry::MeshData,
     material_type: MaterialType,
     transform: [f32; 12],
+    metadata: &crate::scene_writer::chunk_grid::ElementMetadata,
 ) -> serde_json::Value {
     serde_json::json!({
         "name": safe_name(name),
         "material": material_type.file_stem(),
         "transform": transform,
+        "metadata": metadata,
         "vertices": mesh_data.vertices,
         "normals": mesh_data.normals,
         "uvs": mesh_data.uvs,
@@ -245,6 +258,7 @@ mod tests {
                 mesh_data: mesh,
                 material_type: MaterialType::BuildingWall,
                 transform: translation_transform(1.0, 0.0, -1.0),
+                metadata: Default::default(),
             }],
         };
 
@@ -289,12 +303,14 @@ mod tests {
                     mesh_data: road_mesh,
                     material_type: MaterialType::RoadAsphalt,
                     transform: translation_transform(10.0, 0.0, -10.0),
+                    metadata: Default::default(),
                 },
                 SceneElement::Mesh {
                     name: "BuildingWall_1".to_string(),
                     mesh_data: building_mesh,
                     material_type: MaterialType::BuildingWall,
                     transform: translation_transform(1.0, 0.0, -1.0),
+                    metadata: Default::default(),
                 },
             ],
         };
@@ -326,6 +342,7 @@ mod tests {
                 mesh_data: road_mesh,
                 material_type: MaterialType::RoadAsphalt,
                 transform: translation_transform(10.0, 0.0, -10.0),
+                metadata: Default::default(),
             }],
         };
 
@@ -349,7 +366,9 @@ mod tests {
         std::fs::create_dir_all(&mesh_data_dir).unwrap();
 
         let mut road_mesh = MeshData::new();
-        road_mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0, 4.0, 0.0, -4.0]);
+        road_mesh
+            .vertices
+            .extend_from_slice(&[0.0, 0.0, 0.0, 4.0, 0.0, -4.0]);
         road_mesh.indices.extend_from_slice(&[0, 1, 0]);
         let chunk = Chunk {
             coord: ChunkCoord(2, 3),
@@ -359,6 +378,7 @@ mod tests {
                 mesh_data: road_mesh,
                 material_type: MaterialType::RoadAsphalt,
                 transform: translation_transform(10.0, 0.0, -20.0),
+                metadata: Default::default(),
             }],
         };
 
@@ -374,5 +394,67 @@ mod tests {
         assert!((x - 266.0).abs() < 0.0001);
         assert!((y - 0.08).abs() < 0.0001);
         assert!((z + 404.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn mesh_json_preserves_navigation_metadata_for_buildings_and_roads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mesh_data_dir = tmp.path().join("mesh_data");
+        std::fs::create_dir_all(&mesh_data_dir).unwrap();
+
+        let mut mesh = MeshData::new();
+        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
+        mesh.indices.extend_from_slice(&[0, 0, 0]);
+
+        let mut chunk = Chunk {
+            coord: ChunkCoord(0, 0),
+            world_bounds: (0, 0, 255, 255),
+            elements: vec![SceneElement::Mesh {
+                name: "BuildingWall_100".to_string(),
+                mesh_data: mesh.clone(),
+                material_type: MaterialType::BuildingWall,
+                transform: translation_transform(1.0, 0.0, 2.0),
+                metadata: [
+                    ("osm_id".to_string(), "100".to_string()),
+                    ("osm_kind".to_string(), "building".to_string()),
+                    ("name".to_string(), "Bund Test Building".to_string()),
+                    ("addr:housenumber".to_string(), "18".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        };
+
+        write_chunk_scene(&chunk, tmp.path(), &mesh_data_dir, &HashMap::new()).unwrap();
+        let chunk_data = std::fs::read_to_string(mesh_data_dir.join("Chunk_0_0.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&chunk_data).unwrap();
+        let metadata = &parsed["elements"][0]["metadata"];
+        assert_eq!(metadata["osm_id"], "100");
+        assert_eq!(metadata["osm_kind"], "building");
+        assert_eq!(metadata["name"], "Bund Test Building");
+        assert_eq!(metadata["addr:housenumber"], "18");
+
+        chunk.elements.push(SceneElement::Mesh {
+            name: "Highway_200".to_string(),
+            mesh_data: mesh,
+            material_type: MaterialType::RoadAsphalt,
+            transform: translation_transform(3.0, 0.0, 4.0),
+            metadata: [
+                ("osm_id".to_string(), "200".to_string()),
+                ("osm_kind".to_string(), "road".to_string()),
+                ("name".to_string(), "Zhongshan East 1st Road".to_string()),
+                ("highway".to_string(), "primary".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        write_roads_scene([&chunk], tmp.path(), &mesh_data_dir, 0.5).unwrap();
+        let roads_data = std::fs::read_to_string(mesh_data_dir.join("roads.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&roads_data).unwrap();
+        let metadata = &parsed["elements"][0]["metadata"];
+        assert_eq!(metadata["osm_id"], "200");
+        assert_eq!(metadata["osm_kind"], "road");
+        assert_eq!(metadata["name"], "Zhongshan East 1st Road");
+        assert_eq!(metadata["highway"], "primary");
     }
 }

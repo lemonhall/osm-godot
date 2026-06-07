@@ -14,6 +14,10 @@ pub enum MaterialType {
     BuildingWallGlass,
     BuildingWallGreenhouse,
     BuildingWallStone,
+    BuildingWallColorRed,
+    BuildingWallColorBlue,
+    BuildingWallColorLight,
+    BuildingWallColorWarm,
     BuildingRoof,
     BuildingRoofDark,
     BuildingRoofTile,
@@ -44,6 +48,10 @@ impl MaterialType {
             MaterialType::BuildingWallGlass => "building_wall_glass",
             MaterialType::BuildingWallGreenhouse => "building_wall_greenhouse",
             MaterialType::BuildingWallStone => "building_wall_stone",
+            MaterialType::BuildingWallColorRed => "building_wall_color_red",
+            MaterialType::BuildingWallColorBlue => "building_wall_color_blue",
+            MaterialType::BuildingWallColorLight => "building_wall_color_light",
+            MaterialType::BuildingWallColorWarm => "building_wall_color_warm",
             MaterialType::BuildingRoof => "building_roof",
             MaterialType::BuildingRoofDark => "building_roof_dark",
             MaterialType::BuildingRoofTile => "building_roof_tile",
@@ -74,6 +82,10 @@ impl MaterialType {
             MaterialType::BuildingWallGlass => (0.18, 0.31, 0.38, 1.0),
             MaterialType::BuildingWallGreenhouse => (0.62, 0.86, 0.78, 1.0),
             MaterialType::BuildingWallStone => (0.39, 0.38, 0.35, 1.0),
+            MaterialType::BuildingWallColorRed => (0.70, 0.22, 0.18, 1.0),
+            MaterialType::BuildingWallColorBlue => (0.20, 0.38, 0.72, 1.0),
+            MaterialType::BuildingWallColorLight => (0.82, 0.78, 0.68, 1.0),
+            MaterialType::BuildingWallColorWarm => (0.76, 0.55, 0.28, 1.0),
             MaterialType::BuildingRoof => (0.42, 0.12, 0.08, 1.0),
             MaterialType::BuildingRoofDark => (0.11, 0.12, 0.13, 1.0),
             MaterialType::BuildingRoofTile => (0.52, 0.16, 0.10, 1.0),
@@ -101,7 +113,11 @@ impl MaterialType {
             | MaterialType::BuildingWallBrick
             | MaterialType::BuildingWallConcrete
             | MaterialType::BuildingWallCommercial
-            | MaterialType::BuildingWallStone => 0.85,
+            | MaterialType::BuildingWallStone
+            | MaterialType::BuildingWallColorRed
+            | MaterialType::BuildingWallColorBlue
+            | MaterialType::BuildingWallColorLight
+            | MaterialType::BuildingWallColorWarm => 0.85,
             MaterialType::BuildingWallGlass
             | MaterialType::BuildingWallGreenhouse
             | MaterialType::BuildingWindow => 0.18,
@@ -145,6 +161,10 @@ pub const ALL_MATERIALS: &[MaterialType] = &[
     MaterialType::BuildingWallGlass,
     MaterialType::BuildingWallGreenhouse,
     MaterialType::BuildingWallStone,
+    MaterialType::BuildingWallColorRed,
+    MaterialType::BuildingWallColorBlue,
+    MaterialType::BuildingWallColorLight,
+    MaterialType::BuildingWallColorWarm,
     MaterialType::BuildingRoof,
     MaterialType::BuildingRoofDark,
     MaterialType::BuildingRoofTile,

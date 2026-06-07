@@ -57,6 +57,11 @@ func _run() -> void:
 	print("E2E roads_node_exists=", roads != null)
 	print("E2E road_mesh_count=", road_mesh_count)
 	print("E2E road_world_span=", road_world_span)
+	var osm_meta_node: Node = _find_first_node_with_osm_meta(scene)
+	print("E2E osm_meta_node=", "null" if osm_meta_node == null else osm_meta_node.name)
+	if osm_meta_node != null:
+		print("E2E osm_meta_kind=", osm_meta_node.get_meta("osm_kind"))
+		print("E2E osm_meta_id=", osm_meta_node.get_meta("osm_id"))
 
 	var yaw_before: float = player.rotation.y
 	var pitch_before: float = camera.rotation.x
@@ -105,8 +110,20 @@ func _run() -> void:
 	if road_world_span < MIN_ROAD_WORLD_SPAN:
 		push_error("E2E roads scene meshes are not spread across world coordinates")
 		failed = true
+	if osm_meta_node == null:
+		push_error("E2E no generated road/building node exposes OSM metadata")
+		failed = true
 
 	quit(1 if failed else 0)
+
+func _find_first_node_with_osm_meta(node: Node) -> Node:
+	if node.has_meta("osm_id") and node.has_meta("osm_kind"):
+		return node
+	for child: Node in node.get_children():
+		var found := _find_first_node_with_osm_meta(child)
+		if found != null:
+			return found
+	return null
 
 func _count_road_mesh_instances(node: Node) -> int:
 	var count := 0

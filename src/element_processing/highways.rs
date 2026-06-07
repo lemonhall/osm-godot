@@ -7,11 +7,7 @@ use crate::scene_writer::tres_writer::MaterialType;
 use crate::scene_writer::SceneWriter;
 
 /// Generate a road surface from a highway way.
-pub fn generate_highway(
-    scene: &mut SceneWriter,
-    way: &ProcessedWay,
-    godot_scale: f32,
-) {
+pub fn generate_highway(scene: &mut SceneWriter, way: &ProcessedWay, godot_scale: f32) {
     if way.nodes.len() < 2 {
         return;
     }
@@ -20,11 +16,8 @@ pub fn generate_highway(
     let width = mesh_builder::highway_width(&way.tags);
 
     // Centerline in arnis coords
-    let centerline_arnis: Vec<(f32, f32)> = way
-        .nodes
-        .iter()
-        .map(|n| (n.x as f32, n.z as f32))
-        .collect();
+    let centerline_arnis: Vec<(f32, f32)> =
+        way.nodes.iter().map(|n| (n.x as f32, n.z as f32)).collect();
 
     // Compute midpoint for world position reference
     let mid_idx = centerline_arnis.len() / 2;
@@ -33,10 +26,7 @@ pub fn generate_highway(
     // Convert centerline to local Godot coords (centered at midpoint)
     let centerline_local: Vec<(f32, f32)> = centerline_arnis
         .iter()
-        .map(|&(x, z)| (
-            (x - center_x) * godot_scale,
-            -(z - center_z) * godot_scale,
-        ))
+        .map(|&(x, z)| ((x - center_x) * godot_scale, -(z - center_z) * godot_scale))
         .collect();
 
     // Generate road surface mesh
@@ -53,6 +43,9 @@ pub fn generate_highway(
         _ => MaterialType::RoadAsphalt,
     };
 
+    let mut metadata = super::osm_metadata(way.id, "road", &way.tags);
+    metadata.insert("road_width_m".to_string(), format!("{width:.2}"));
+
     let name = format!("Highway_{}", way.id);
-    scene.add_mesh(name, mesh, material, world_x, world_z);
+    scene.add_mesh_with_metadata(name, mesh, material, world_x, world_z, metadata);
 }

@@ -80,7 +80,8 @@ fn push_quad(
         m.normals.extend_from_slice(&[normal.0, normal.1, normal.2]);
     }
     // UVs (planar unwrap, simple)
-    m.uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+    m.uvs
+        .extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
     // Two triangles: a-b-d, b-c-d
     m.indices
         .extend_from_slice(&[base, base + 1, base + 3, base + 1, base + 2, base + 3]);
@@ -200,7 +201,14 @@ pub fn make_wall_outline(polygon: &[(f32, f32)], height: f32, thickness: f32) ->
         let inner_tr = (x1 + nx * thickness, 0.0, z1 + nz * thickness);
         let inner_br = (x1 + nx * thickness, height, z1 + nz * thickness);
         let inner_bl = (x0 + nx * thickness, height, z0 + nz * thickness);
-        push_quad(&mut m, inner_tr, inner_tl, inner_bl, inner_br, (nx, 0.0, nz));
+        push_quad(
+            &mut m,
+            inner_tr,
+            inner_tl,
+            inner_bl,
+            inner_br,
+            (nx, 0.0, nz),
+        );
     }
 
     // Top rim (between outer and inner edge at y=height)
@@ -248,8 +256,7 @@ pub fn make_roof_flat(polygon: &[(f32, f32)], height: f32) -> MeshData {
 
     let n = polygon.len() as u32;
     for i in 1..(n - 1) {
-        m.indices
-            .extend_from_slice(&[base, base + i, base + i + 1]);
+        m.indices.extend_from_slice(&[base, base + i, base + i + 1]);
     }
 
     // Also add bottom face for the roof (visible from below)
@@ -270,11 +277,7 @@ pub fn make_roof_flat(polygon: &[(f32, f32)], height: f32) -> MeshData {
 
 /// Simple gabled roof: ridge at `ridge_y`, eaves at `base_y`.
 /// `ridge_dir` is (dx, dz) — the direction of the ridge line.
-pub fn make_roof_gabled(
-    polygon: &[(f32, f32)],
-    base_y: f32,
-    ridge_y: f32,
-) -> MeshData {
+pub fn make_roof_gabled(polygon: &[(f32, f32)], base_y: f32, ridge_y: f32) -> MeshData {
     if polygon.len() < 4 {
         return make_roof_flat(polygon, base_y);
     }
@@ -308,7 +311,11 @@ pub fn make_roof_gabled(
             (min_x, base_y, max_z),
             (mid_x, ridge_y, max_z),
             (mid_x, ridge_y, min_z),
-            normal_of((min_x, base_y, 0.0), (mid_x, ridge_y, 0.0), (min_x, base_y, 0.0)),
+            normal_of(
+                (min_x, base_y, 0.0),
+                (mid_x, ridge_y, 0.0),
+                (min_x, base_y, 0.0),
+            ),
         );
         // Right slope (mid_x → max_x)
         push_quad(
@@ -317,12 +324,26 @@ pub fn make_roof_gabled(
             (mid_x, ridge_y, max_z),
             (max_x, base_y, max_z),
             (max_x, base_y, min_z),
-            normal_of((mid_x, ridge_y, 0.0), (max_x, base_y, 0.0), (mid_x, ridge_y, 0.0)),
+            normal_of(
+                (mid_x, ridge_y, 0.0),
+                (max_x, base_y, 0.0),
+                (mid_x, ridge_y, 0.0),
+            ),
         );
 
         // Front + back triangles (gable ends)
-        add_gable_end(&mut m, (min_x, base_y, min_z), (max_x, base_y, min_z), (mid_x, ridge_y, min_z));
-        add_gable_end(&mut m, (max_x, base_y, max_z), (min_x, base_y, max_z), (mid_x, ridge_y, max_z));
+        add_gable_end(
+            &mut m,
+            (min_x, base_y, min_z),
+            (max_x, base_y, min_z),
+            (mid_x, ridge_y, min_z),
+        );
+        add_gable_end(
+            &mut m,
+            (max_x, base_y, max_z),
+            (min_x, base_y, max_z),
+            (mid_x, ridge_y, max_z),
+        );
     } else {
         // Ridge runs along X (peaked in Z direction)
         let mid_z = (min_z + max_z) * 0.5;
@@ -334,7 +355,11 @@ pub fn make_roof_gabled(
             (max_x, base_y, min_z),
             (max_x, ridge_y, mid_z),
             (min_x, ridge_y, mid_z),
-            normal_of((0.0, base_y, min_z), (0.0, ridge_y, mid_z), (0.0, base_y, min_z)),
+            normal_of(
+                (0.0, base_y, min_z),
+                (0.0, ridge_y, mid_z),
+                (0.0, base_y, min_z),
+            ),
         );
         // Back slope (mid_z → max_z)
         push_quad(
@@ -343,15 +368,177 @@ pub fn make_roof_gabled(
             (max_x, ridge_y, mid_z),
             (max_x, base_y, max_z),
             (min_x, base_y, max_z),
-            normal_of((0.0, ridge_y, mid_z), (0.0, base_y, max_z), (0.0, ridge_y, mid_z)),
+            normal_of(
+                (0.0, ridge_y, mid_z),
+                (0.0, base_y, max_z),
+                (0.0, ridge_y, mid_z),
+            ),
         );
 
         // Left + right triangles (gable ends)
-        add_gable_end(&mut m, (min_x, base_y, min_z), (min_x, base_y, max_z), (min_x, ridge_y, mid_z));
-        add_gable_end(&mut m, (max_x, base_y, max_z), (max_x, base_y, min_z), (max_x, ridge_y, mid_z));
+        add_gable_end(
+            &mut m,
+            (min_x, base_y, min_z),
+            (min_x, base_y, max_z),
+            (min_x, ridge_y, mid_z),
+        );
+        add_gable_end(
+            &mut m,
+            (max_x, base_y, max_z),
+            (max_x, base_y, min_z),
+            (max_x, ridge_y, mid_z),
+        );
     }
 
     m
+}
+
+pub fn make_roof_hipped(polygon: &[(f32, f32)], base_y: f32, ridge_y: f32) -> MeshData {
+    if polygon.len() < 4 {
+        return make_roof_flat(polygon, base_y);
+    }
+    let (min_x, max_x, min_z, max_z) = polygon_bbox(polygon);
+    let width_x = max_x - min_x;
+    let width_z = max_z - min_z;
+    if width_x <= 0.01 || width_z <= 0.01 {
+        return make_roof_flat(polygon, base_y);
+    }
+
+    let mut m = MeshData::new();
+    let inset_x = width_x * 0.26;
+    let inset_z = width_z * 0.26;
+
+    if width_x >= width_z {
+        let rz0 = min_z + inset_z;
+        let rz1 = max_z - inset_z;
+        let rx = (min_x + max_x) * 0.5;
+        let r0 = (rx, ridge_y, rz0);
+        let r1 = (rx, ridge_y, rz1);
+        push_quad(
+            &mut m,
+            (min_x, base_y, min_z),
+            (min_x, base_y, max_z),
+            r1,
+            r0,
+            (0.0, 1.0, 0.0),
+        );
+        push_quad(
+            &mut m,
+            r0,
+            r1,
+            (max_x, base_y, max_z),
+            (max_x, base_y, min_z),
+            (0.0, 1.0, 0.0),
+        );
+        push_roof_triangle(&mut m, (min_x, base_y, min_z), r0, (max_x, base_y, min_z));
+        push_roof_triangle(&mut m, (max_x, base_y, max_z), r1, (min_x, base_y, max_z));
+    } else {
+        let rx0 = min_x + inset_x;
+        let rx1 = max_x - inset_x;
+        let rz = (min_z + max_z) * 0.5;
+        let r0 = (rx0, ridge_y, rz);
+        let r1 = (rx1, ridge_y, rz);
+        push_quad(
+            &mut m,
+            (min_x, base_y, min_z),
+            r0,
+            r1,
+            (max_x, base_y, min_z),
+            (0.0, 1.0, 0.0),
+        );
+        push_quad(
+            &mut m,
+            (max_x, base_y, max_z),
+            r1,
+            r0,
+            (min_x, base_y, max_z),
+            (0.0, 1.0, 0.0),
+        );
+        push_roof_triangle(&mut m, (min_x, base_y, max_z), r0, (min_x, base_y, min_z));
+        push_roof_triangle(&mut m, (max_x, base_y, min_z), r1, (max_x, base_y, max_z));
+    }
+    m
+}
+
+pub fn make_roof_skillion(polygon: &[(f32, f32)], base_y: f32, high_y: f32) -> MeshData {
+    if polygon.len() < 4 {
+        return make_roof_flat(polygon, base_y);
+    }
+    let (min_x, max_x, min_z, max_z) = polygon_bbox(polygon);
+    if max_x - min_x <= 0.01 || max_z - min_z <= 0.01 {
+        return make_roof_flat(polygon, base_y);
+    }
+
+    let mut m = MeshData::new();
+    push_quad(
+        &mut m,
+        (min_x, base_y, min_z),
+        (max_x, base_y, min_z),
+        (max_x, high_y, max_z),
+        (min_x, high_y, max_z),
+        (0.0, 1.0, 0.0),
+    );
+    push_roof_triangle(
+        &mut m,
+        (min_x, base_y, min_z),
+        (min_x, high_y, max_z),
+        (min_x, base_y, max_z),
+    );
+    push_roof_triangle(
+        &mut m,
+        (max_x, base_y, max_z),
+        (max_x, high_y, max_z),
+        (max_x, base_y, min_z),
+    );
+    m
+}
+
+pub fn make_roof_pyramidal(polygon: &[(f32, f32)], base_y: f32, peak_y: f32) -> MeshData {
+    if polygon.len() < 4 {
+        return make_roof_flat(polygon, base_y);
+    }
+    let (min_x, max_x, min_z, max_z) = polygon_bbox(polygon);
+    if max_x - min_x <= 0.01 || max_z - min_z <= 0.01 {
+        return make_roof_flat(polygon, base_y);
+    }
+
+    let mut m = MeshData::new();
+    let peak = ((min_x + max_x) * 0.5, peak_y, (min_z + max_z) * 0.5);
+    push_roof_triangle(&mut m, (min_x, base_y, min_z), (max_x, base_y, min_z), peak);
+    push_roof_triangle(&mut m, (max_x, base_y, min_z), (max_x, base_y, max_z), peak);
+    push_roof_triangle(&mut m, (max_x, base_y, max_z), (min_x, base_y, max_z), peak);
+    push_roof_triangle(&mut m, (min_x, base_y, max_z), (min_x, base_y, min_z), peak);
+    m
+}
+
+fn polygon_bbox(polygon: &[(f32, f32)]) -> (f32, f32, f32, f32) {
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_z = f32::MAX;
+    let mut max_z = f32::MIN;
+    for &(x, z) in polygon {
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_z = min_z.min(z);
+        max_z = max_z.max(z);
+    }
+    (min_x, max_x, min_z, max_z)
+}
+
+fn push_roof_triangle(
+    m: &mut MeshData,
+    a: (f32, f32, f32),
+    b: (f32, f32, f32),
+    c: (f32, f32, f32),
+) {
+    let n = triangle_normal(a, b, c);
+    let base = m.vertex_count() as u32;
+    for &(x, y, z) in &[a, b, c] {
+        m.vertices.extend_from_slice(&[x, y, z]);
+        m.normals.extend_from_slice(&[n.0, n.1, n.2]);
+    }
+    m.uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 0.5, 1.0]);
+    m.indices.extend_from_slice(&[base, base + 1, base + 2]);
 }
 
 fn add_gable_end(
@@ -366,9 +553,15 @@ fn add_gable_end(
 
     let base = m.vertex_count() as u32;
     m.vertices.extend_from_slice(&[
-        bottom_left.0, bottom_left.1, bottom_left.2,
-        bottom_right.0, bottom_right.1, bottom_right.2,
-        peak.0, peak.1, peak.2,
+        bottom_left.0,
+        bottom_left.1,
+        bottom_left.2,
+        bottom_right.0,
+        bottom_right.1,
+        bottom_right.2,
+        peak.0,
+        peak.1,
+        peak.2,
     ]);
     for _ in 0..3 {
         m.normals.extend_from_slice(&[n.0, n.1, n.2]);
@@ -408,15 +601,24 @@ pub fn make_road_surface(centerline: &[(f32, f32)], width: f32) -> MeshData {
         // Four corners of the road segment at y=0 (ground level, raised slightly)
         let y_road = 0.05;
         m.vertices.extend_from_slice(&[
-            x0 - nx, y_road, z0 - nz,
-            x0 + nx, y_road, z0 + nz,
-            x1 + nx, y_road, z1 + nz,
-            x1 - nx, y_road, z1 - nz,
+            x0 - nx,
+            y_road,
+            z0 - nz,
+            x0 + nx,
+            y_road,
+            z0 + nz,
+            x1 + nx,
+            y_road,
+            z1 + nz,
+            x1 - nx,
+            y_road,
+            z1 - nz,
         ]);
         for _ in 0..4 {
             m.normals.extend_from_slice(&[0.0, 1.0, 0.0]);
         }
-        m.uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+        m.uvs
+            .extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
         m.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -453,7 +655,8 @@ pub fn make_cylinder(radius: f32, height: f32, segments: u32) -> MeshData {
         let z = angle.sin() * radius;
         m.vertices.extend_from_slice(&[x, height, z]);
         m.normals.extend_from_slice(&[0.0, 1.0, 0.0]);
-        m.uvs.extend_from_slice(&[(angle / (2.0 * PI)).fract(), 1.0]);
+        m.uvs
+            .extend_from_slice(&[(angle / (2.0 * PI)).fract(), 1.0]);
     }
     let ring_bot_start = m.vertex_count() as u32;
     for i in 0..n {
@@ -462,7 +665,8 @@ pub fn make_cylinder(radius: f32, height: f32, segments: u32) -> MeshData {
         let z = angle.sin() * radius;
         m.vertices.extend_from_slice(&[x, 0.0, z]);
         m.normals.extend_from_slice(&[0.0, -1.0, 0.0]);
-        m.uvs.extend_from_slice(&[(angle / (2.0 * PI)).fract(), 0.0]);
+        m.uvs
+            .extend_from_slice(&[(angle / (2.0 * PI)).fract(), 0.0]);
     }
 
     // Top and bottom caps
@@ -470,8 +674,11 @@ pub fn make_cylinder(radius: f32, height: f32, segments: u32) -> MeshData {
         let j = (i + 1) % n;
         m.indices
             .extend_from_slice(&[top_center, ring_start + i as u32, ring_start + j as u32]);
-        m.indices
-            .extend_from_slice(&[bot_center, ring_bot_start + j as u32, ring_bot_start + i as u32]);
+        m.indices.extend_from_slice(&[
+            bot_center,
+            ring_bot_start + j as u32,
+            ring_bot_start + i as u32,
+        ]);
     }
 
     // Side faces
@@ -484,10 +691,18 @@ pub fn make_cylinder(radius: f32, height: f32, segments: u32) -> MeshData {
         let d = ring_bot_start + i as u32;
 
         m.vertices.extend_from_slice(&[
-            m.vertices[a as usize * 3], height, m.vertices[a as usize * 3 + 2],
-            m.vertices[b as usize * 3], height, m.vertices[b as usize * 3 + 2],
-            m.vertices[c as usize * 3], 0.0, m.vertices[c as usize * 3 + 2],
-            m.vertices[d as usize * 3], 0.0, m.vertices[d as usize * 3 + 2],
+            m.vertices[a as usize * 3],
+            height,
+            m.vertices[a as usize * 3 + 2],
+            m.vertices[b as usize * 3],
+            height,
+            m.vertices[b as usize * 3 + 2],
+            m.vertices[c as usize * 3],
+            0.0,
+            m.vertices[c as usize * 3 + 2],
+            m.vertices[d as usize * 3],
+            0.0,
+            m.vertices[d as usize * 3 + 2],
         ]);
 
         // Side normal (radial outward)
@@ -497,7 +712,8 @@ pub fn make_cylinder(radius: f32, height: f32, segments: u32) -> MeshData {
         for _ in 0..4 {
             m.normals.extend_from_slice(&[nx, 0.0, nz]);
         }
-        m.uvs.extend_from_slice(&[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+        m.uvs
+            .extend_from_slice(&[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
         m.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
@@ -526,7 +742,8 @@ pub fn make_cone(radius: f32, height: f32, segments: u32) -> MeshData {
         let z = angle.sin() * radius;
         m.vertices.extend_from_slice(&[x, 0.0, z]);
         m.normals.extend_from_slice(&[0.0, -1.0, 0.0]);
-        m.uvs.extend_from_slice(&[(angle / (2.0 * PI)).fract(), 0.0]);
+        m.uvs
+            .extend_from_slice(&[(angle / (2.0 * PI)).fract(), 0.0]);
     }
 
     // Base center
@@ -551,11 +768,7 @@ pub fn make_cone(radius: f32, height: f32, segments: u32) -> MeshData {
 
 // ─── Math helpers ───────────────────────────────────────────────────────────
 
-fn triangle_normal(
-    a: (f32, f32, f32),
-    b: (f32, f32, f32),
-    c: (f32, f32, f32),
-) -> (f32, f32, f32) {
+fn triangle_normal(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32)) -> (f32, f32, f32) {
     let u = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
     let v = (c.0 - a.0, c.1 - a.1, c.2 - a.2);
     let nx = u.1 * v.2 - u.2 * v.1;
@@ -569,11 +782,7 @@ fn triangle_normal(
     }
 }
 
-fn normal_of(
-    a: (f32, f32, f32),
-    b: (f32, f32, f32),
-    _c: (f32, f32, f32),
-) -> (f32, f32, f32) {
+fn normal_of(a: (f32, f32, f32), b: (f32, f32, f32), _c: (f32, f32, f32)) -> (f32, f32, f32) {
     // Simplified: just use Y-up normal for roof slopes
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;

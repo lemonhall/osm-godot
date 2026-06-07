@@ -8,11 +8,7 @@ use crate::scene_writer::tres_writer::MaterialType;
 use std::sync::Arc;
 
 /// Generate terrain meshes for all chunks and add them to the chunk grid.
-pub fn generate_terrain(
-    chunk_grid: &mut ChunkGrid,
-    ground: &Arc<Ground>,
-    godot_scale: f32,
-) {
+pub fn generate_terrain(chunk_grid: &mut ChunkGrid, ground: &Arc<Ground>, godot_scale: f32) {
     let step = 8; // Sample every N blocks (higher = coarser terrain = faster)
 
     for coord in chunk_grid.all_coords() {
@@ -43,6 +39,7 @@ pub fn generate_terrain(
             mesh_data: terrain_mesh,
             material_type: material,
             transform: tscn_writer::translation_transform(0.0, 0.0, 0.0),
+            metadata: Default::default(),
         });
     }
 }
@@ -175,14 +172,14 @@ fn compute_smooth_normals(normals: &mut [f32], vertices: &[f32], indices: &[u32]
 /// Map ESA WorldCover land class to a MaterialType.
 fn land_cover_to_material(lc_class: u8) -> MaterialType {
     match lc_class {
-        10 => MaterialType::TreeLeaves,   // Tree cover → grass (trees are separate objects)
+        10 => MaterialType::TreeLeaves, // Tree cover → grass (trees are separate objects)
         20 => MaterialType::TerrainGrass, // Shrubland
         30 => MaterialType::TerrainGrass, // Grassland
-        40 => MaterialType::TerrainDirt,  // Cropland
+        40 => MaterialType::TerrainDirt, // Cropland
         50 => MaterialType::TerrainBuiltUp, // Built-up
-        60 => MaterialType::TerrainDirt,  // Bare
-        70 => MaterialType::TerrainDirt,  // Snow/ice (rare)
-        80 => MaterialType::Water,        // Water
+        60 => MaterialType::TerrainDirt, // Bare
+        70 => MaterialType::TerrainDirt, // Snow/ice (rare)
+        80 => MaterialType::Water,      // Water
         90 => MaterialType::TerrainGrass, // Wetland
         95 => MaterialType::TerrainGrass, // Mangroves
         100 => MaterialType::TerrainDirt, // Moss/lichen
