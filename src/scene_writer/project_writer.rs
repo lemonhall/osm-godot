@@ -26,6 +26,11 @@ pub fn write_project_file(output_dir: &Path, project_name: &str) -> io::Result<(
     writeln!(f)?;
     writeln!(f, "compatibility/default_parent_skeleton_in_mesh_instance_3d=true")?;
     writeln!(f)?;
+    writeln!(f, "[display]")?;
+    writeln!(f)?;
+    writeln!(f, "window/size/viewport_width=1280")?;
+    writeln!(f, "window/size/viewport_height=720")?;
+    writeln!(f)?;
     writeln!(f, "[input]")?;
     writeln!(f)?;
     write_key_action(&mut f, "move_forward", &[87, 4194320])?;
@@ -132,5 +137,17 @@ mod tests {
         assert!(project.contains("noclip_toggle="));
         assert!(project.contains("\"keycode\":87"));
         assert!(project.contains("\"physical_keycode\":87"));
+    }
+
+    #[test]
+    fn project_file_sets_larger_initial_window() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_project_file(tmp.path(), "Test World").unwrap();
+
+        let project = std::fs::read_to_string(tmp.path().join("project.godot")).unwrap();
+        assert!(project.contains("[display]"));
+        assert!(project.contains("window/size/viewport_width=1280"));
+        assert!(project.contains("window/size/viewport_height=720"));
     }
 }

@@ -433,13 +433,15 @@ impl SceneWriter {
         writeln!(f, "func _ready() -> void:")?;
         writeln!(f, "\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f)?;
-        writeln!(f, "func _unhandled_input(event: InputEvent) -> void:")?;
+        writeln!(f, "func _input(event: InputEvent) -> void:")?;
         writeln!(f, "\tif event.is_action_pressed(\"mouse_capture_toggle\"):")?;
         writeln!(f, "\t\tif Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)")?;
         writeln!(f, "\t\telse:")?;
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
-        writeln!(f, "\tif event.is_action_pressed(\"noclip_toggle\"):")?;
+        writeln!(f, "\tif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:")?;
+        writeln!(f, "\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
+        writeln!(f, "\tif event.is_action_pressed(\"noclip_toggle\") or _is_key_pressed_once(event, KEY_V):")?;
         writeln!(f, "\t\tnoclip = not noclip")?;
         writeln!(f, "\t\tcollision_shape.disabled = noclip")?;
         writeln!(f, "\tif event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
@@ -448,10 +450,10 @@ impl SceneWriter {
         writeln!(f, "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))")?;
         writeln!(f)?;
         writeln!(f, "func _physics_process(delta: float) -> void:")?;
-        writeln!(f, "\tvar input_dir := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_backward\")")?;
+        writeln!(f, "\tvar input_dir := _movement_input_vector()")?;
         writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
         writeln!(f, "\tvar speed := move_speed")?;
-        writeln!(f, "\tif Input.is_action_pressed(\"sprint\"):")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"sprint\") or Input.is_key_pressed(KEY_SHIFT):")?;
         writeln!(f, "\t\tspeed *= sprint_multiplier")?;
         writeln!(f, "\tif noclip:")?;
         writeln!(f, "\t\t_noclip_move(delta, direction, speed * noclip_speed_multiplier)")?;
@@ -475,6 +477,27 @@ impl SceneWriter {
         writeln!(f, "\t\tvertical -= 1.0")?;
         writeln!(f, "\tglobal_position += (direction + Vector3.UP * vertical).normalized() * speed * delta")?;
         writeln!(f, "\tvelocity = Vector3.ZERO")?;
+        writeln!(f)?;
+        writeln!(f, "func _movement_input_vector() -> Vector2:")?;
+        writeln!(f, "\tvar input_dir := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_backward\")")?;
+        writeln!(f, "\tvar direct := Vector2.ZERO")?;
+        writeln!(f, "\tif Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):")?;
+        writeln!(f, "\t\tdirect.x -= 1.0")?;
+        writeln!(f, "\tif Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):")?;
+        writeln!(f, "\t\tdirect.x += 1.0")?;
+        writeln!(f, "\tif Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):")?;
+        writeln!(f, "\t\tdirect.y -= 1.0")?;
+        writeln!(f, "\tif Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):")?;
+        writeln!(f, "\t\tdirect.y += 1.0")?;
+        writeln!(f, "\tif direct.length_squared() > 0.0:")?;
+        writeln!(f, "\t\treturn direct.normalized()")?;
+        writeln!(f, "\treturn input_dir")?;
+        writeln!(f)?;
+        writeln!(f, "func _is_key_pressed_once(event: InputEvent, key: Key) -> bool:")?;
+        writeln!(f, "\tif not (event is InputEventKey):")?;
+        writeln!(f, "\t\treturn false")?;
+        writeln!(f, "\tvar key_event := event as InputEventKey")?;
+        writeln!(f, "\treturn key_event.pressed and not key_event.echo and (key_event.keycode == key or key_event.physical_keycode == key)")?;
 
         Ok(())
     }
@@ -552,11 +575,10 @@ impl SceneWriter {
         writeln!(f, "\tshape.owner = body.owner")?;
         writeln!(f)?;
         writeln!(f, "func _should_add_collision(material_name: String) -> bool:")?;
-        writeln!(f, "\treturn not (")?;
-        writeln!(f, "\t\tmaterial_name == \"water\"")?;
-        writeln!(f, "\t\tor material_name == \"tree_leaves\"")?;
-        writeln!(f, "\t\tor material_name == \"building_window\"")?;
-        writeln!(f, "\t\tor material_name == \"building_trim\"")?;
+        writeln!(f, "\treturn (")?;
+        writeln!(f, "\t\tmaterial_name.begins_with(\"terrain_\")")?;
+        writeln!(f, "\t\tor material_name.begins_with(\"road_\")")?;
+        writeln!(f, "\t\tor material_name == \"railway_gravel\"")?;
         writeln!(f, "\t)")?;
         writeln!(f)?;
         writeln!(f, "func _to_vec3_array(values: Array) -> PackedVector3Array:")?;
@@ -813,6 +835,39 @@ mod tests {
     }
 
     #[test]
+    fn fps_player_script_handles_mouse_in_input_callback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        assert!(script.contains("func _input(event: InputEvent) -> void:"));
+        assert!(script.contains("event is InputEventMouseButton"));
+        assert!(script.contains("MOUSE_BUTTON_LEFT"));
+        assert!(!script.contains("func _unhandled_input(event: InputEvent) -> void:"));
+    }
+
+    #[test]
+    fn fps_player_script_has_direct_keyboard_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        assert!(script.contains("func _movement_input_vector() -> Vector2:"));
+        assert!(script.contains("Input.is_key_pressed(KEY_W)"));
+        assert!(script.contains("Input.is_key_pressed(KEY_UP)"));
+        assert!(script.contains("key_event.keycode == key"));
+        assert!(script.contains("key_event.physical_keycode == key"));
+    }
+
+    #[test]
     fn chunk_loader_creates_collision_for_solid_meshes() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
@@ -827,5 +882,8 @@ mod tests {
         assert!(script.contains("CollisionShape3D.new()"));
         assert!(script.contains("mesh.create_trimesh_shape()"));
         assert!(script.contains("func _should_add_collision(material_name: String) -> bool:"));
+        assert!(script.contains("material_name.begins_with(\"terrain_\")"));
+        assert!(script.contains("material_name.begins_with(\"road_\")"));
+        assert!(!script.contains("material_name == \"building_wall\""));
     }
 }
