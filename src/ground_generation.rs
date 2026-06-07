@@ -109,7 +109,7 @@ fn build_chunk_terrain(
             let bl = ((ri + 1) * cols + ci) as u32;
             let br = ((ri + 1) * cols + ci + 1) as u32;
 
-            indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+            indices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
         }
     }
 
@@ -230,5 +230,33 @@ mod tests {
         assert_eq!(transform[11], 0.0);
         assert_eq!(mesh_data.vertices[0], 0.0);
         assert_eq!(mesh_data.vertices[2], 0.0);
+    }
+
+    #[test]
+    fn flat_terrain_normals_point_up_for_godot_backface_culling() {
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let mut chunk_grid = ChunkGrid::new(&bbox, 256);
+        let ground = Arc::new(Ground::new_flat(0));
+
+        generate_terrain(&mut chunk_grid, &ground, 0.5);
+
+        let chunk = &chunk_grid.chunks[&ChunkCoord(0, 0)];
+        let terrain = chunk
+            .elements
+            .iter()
+            .find(|element| {
+                matches!(
+                    element,
+                    crate::scene_writer::chunk_grid::SceneElement::Mesh { name, .. }
+                        if name == "Terrain_0_0"
+                )
+            })
+            .expect("terrain mesh for chunk 0,0");
+
+        let crate::scene_writer::chunk_grid::SceneElement::Mesh { mesh_data, .. } = terrain else {
+            panic!("expected mesh element");
+        };
+
+        assert!(mesh_data.normals.chunks(3).all(|normal| normal[1] > 0.0));
     }
 }

@@ -123,14 +123,17 @@ impl SceneWriter {
         let scenes_dir = self.output_dir.join("scenes");
         let materials_dir = self.output_dir.join("materials");
         let scripts_dir = self.output_dir.join("scripts");
+        let mesh_data_dir = self.output_dir.join("mesh_data");
 
         fs::create_dir_all(&scenes_dir)?;
         fs::create_dir_all(&materials_dir)?;
         fs::create_dir_all(&scripts_dir)?;
+        fs::create_dir_all(&mesh_data_dir)?;
 
         // Write materials
         tres_writer::write_all_materials(&materials_dir)?;
         self.write_fps_player_script(&scripts_dir)?;
+        self.write_chunk_mesh_loader_script(&scripts_dir)?;
 
         // Write each chunk scene
         let mut non_empty_count = 0u64;
@@ -139,7 +142,7 @@ impl SceneWriter {
             if chunk.elements.is_empty() {
                 continue;
             }
-            tscn_writer::write_chunk_scene(chunk, &scenes_dir, &self.material_ids)?;
+            tscn_writer::write_chunk_scene(chunk, &scenes_dir, &mesh_data_dir, &self.material_ids)?;
             non_empty_count += 1;
         }
 
@@ -309,6 +312,93 @@ impl SceneWriter {
         writeln!(f, "\t\tspeed *= sprint_multiplier")?;
         writeln!(f, "\tvelocity = Vector3(direction.x * speed, vertical * speed, direction.z * speed)")?;
         writeln!(f, "\tmove_and_slide()")?;
+
+        Ok(())
+    }
+
+    fn write_chunk_mesh_loader_script(&self, scripts_dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = scripts_dir.join("chunk_mesh_loader.gd");
+        let mut f = std::fs::File::create(&path)?;
+
+        writeln!(f, "@tool")?;
+        writeln!(f, "extends Node3D")?;
+        writeln!(f)?;
+        writeln!(f, "@export var mesh_data_path := \"\"")?;
+        writeln!(f)?;
+        writeln!(f, "func _ready() -> void:")?;
+        writeln!(f, "\t_load_meshes()")?;
+        writeln!(f)?;
+        writeln!(f, "func _load_meshes() -> void:")?;
+        writeln!(f, "\t_clear_generated_children()")?;
+        writeln!(f, "\tif mesh_data_path.is_empty():")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar file := FileAccess.open(mesh_data_path, FileAccess.READ)")?;
+        writeln!(f, "\tif file == null:")?;
+        writeln!(f, "\t\tpush_error(\"Failed to open mesh data: \" + mesh_data_path)")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar parsed = JSON.parse_string(file.get_as_text())")?;
+        writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
+        writeln!(f, "\t\tpush_error(\"Invalid mesh data: \" + mesh_data_path)")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tfor element in parsed.get(\"elements\", []):")?;
+        writeln!(f, "\t\t_add_mesh_instance(element)")?;
+        writeln!(f)?;
+        writeln!(f, "func _clear_generated_children() -> void:")?;
+        writeln!(f, "\tfor child in get_children():")?;
+        writeln!(f, "\t\tif child.get_meta(\"osm_generated\", false):")?;
+        writeln!(f, "\t\t\tremove_child(child)")?;
+        writeln!(f, "\t\t\tchild.queue_free()")?;
+        writeln!(f)?;
+        writeln!(f, "func _add_mesh_instance(element: Dictionary) -> void:")?;
+        writeln!(f, "\tvar mesh := ArrayMesh.new()")?;
+        writeln!(f, "\tvar arrays := []")?;
+        writeln!(f, "\tarrays.resize(Mesh.ARRAY_MAX)")?;
+        writeln!(f, "\tarrays[Mesh.ARRAY_VERTEX] = _to_vec3_array(element.get(\"vertices\", []))")?;
+        writeln!(f, "\tarrays[Mesh.ARRAY_NORMAL] = _to_vec3_array(element.get(\"normals\", []))")?;
+        writeln!(f, "\tarrays[Mesh.ARRAY_TEX_UV] = _to_vec2_array(element.get(\"uvs\", []))")?;
+        writeln!(f, "\tarrays[Mesh.ARRAY_INDEX] = _to_int_array(element.get(\"indices\", []))")?;
+        writeln!(f, "\tif arrays[Mesh.ARRAY_VERTEX].is_empty() or arrays[Mesh.ARRAY_INDEX].is_empty():")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)")?;
+        writeln!(f, "\tvar instance := MeshInstance3D.new()")?;
+        writeln!(f, "\tinstance.name = str(element.get(\"name\", \"Mesh\"))")?;
+        writeln!(f, "\tinstance.mesh = mesh")?;
+        writeln!(f, "\tinstance.transform = _to_transform(element.get(\"transform\", []))")?;
+        writeln!(f, "\tvar material = load(\"res://materials/\" + str(element.get(\"material\", \"terrain_grass\")) + \".tres\")")?;
+        writeln!(f, "\tif material != null:")?;
+        writeln!(f, "\t\tinstance.set_surface_override_material(0, material)")?;
+        writeln!(f, "\tinstance.set_meta(\"osm_generated\", true)")?;
+        writeln!(f, "\tadd_child(instance)")?;
+        writeln!(f, "\tinstance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner")?;
+        writeln!(f)?;
+        writeln!(f, "func _to_vec3_array(values: Array) -> PackedVector3Array:")?;
+        writeln!(f, "\tvar out := PackedVector3Array()")?;
+        writeln!(f, "\tfor i in range(0, values.size() - 2, 3):")?;
+        writeln!(f, "\t\tout.append(Vector3(float(values[i]), float(values[i + 1]), float(values[i + 2])))")?;
+        writeln!(f, "\treturn out")?;
+        writeln!(f)?;
+        writeln!(f, "func _to_vec2_array(values: Array) -> PackedVector2Array:")?;
+        writeln!(f, "\tvar out := PackedVector2Array()")?;
+        writeln!(f, "\tfor i in range(0, values.size() - 1, 2):")?;
+        writeln!(f, "\t\tout.append(Vector2(float(values[i]), float(values[i + 1])))")?;
+        writeln!(f, "\treturn out")?;
+        writeln!(f)?;
+        writeln!(f, "func _to_int_array(values: Array) -> PackedInt32Array:")?;
+        writeln!(f, "\tvar out := PackedInt32Array()")?;
+        writeln!(f, "\tfor value in values:")?;
+        writeln!(f, "\t\tout.append(int(value))")?;
+        writeln!(f, "\treturn out")?;
+        writeln!(f)?;
+        writeln!(f, "func _to_transform(values: Array) -> Transform3D:")?;
+        writeln!(f, "\tif values.size() < 12:")?;
+        writeln!(f, "\t\treturn Transform3D.IDENTITY")?;
+        writeln!(f, "\treturn Transform3D(Basis(")?;
+        writeln!(f, "\t\tVector3(float(values[0]), float(values[1]), float(values[2])),")?;
+        writeln!(f, "\t\tVector3(float(values[3]), float(values[4]), float(values[5])),")?;
+        writeln!(f, "\t\tVector3(float(values[6]), float(values[7]), float(values[8]))")?;
+        writeln!(f, "\t), Vector3(float(values[9]), float(values[10]), float(values[11])))")?;
 
         Ok(())
     }

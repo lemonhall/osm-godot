@@ -13,128 +13,92 @@ use std::path::Path;
 pub fn write_chunk_scene(
     chunk: &Chunk,
     scenes_dir: &Path,
-    material_ids: &HashMap<MaterialType, u32>,
+    mesh_data_dir: &Path,
+    _material_ids: &HashMap<MaterialType, u32>,
 ) -> io::Result<()> {
     let filename = format!("Chunk_{}_{}.tscn", chunk.coord.0, chunk.coord.1);
     let path = scenes_dir.join(&filename);
     let mut f = fs::File::create(&path)?;
 
-    let ext_count = material_ids.len();
-    let sub_count = chunk.elements.len() as u32;
-    let load_steps = ext_count as u32 + sub_count;
+    fs::create_dir_all(mesh_data_dir)?;
+    write_chunk_mesh_data(chunk, mesh_data_dir)?;
 
     let chunk_uid = chunk_uid(chunk.coord.0, chunk.coord.1);
-    writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://{chunk_uid}\"]")?;
+    writeln!(f, "[gd_scene load_steps=2 format=3 uid=\"uid://{chunk_uid}\"]")?;
     writeln!(f)?;
-
-    let mut mat_ext_ids: HashMap<MaterialType, u32> = HashMap::new();
-    for (mt, &eid) in material_ids {
-        writeln!(f, "[ext_resource type=\"Material\" path=\"res://materials/{}.tres\" id=\"{eid}\"]", mt.file_stem())?;
-        mat_ext_ids.insert(*mt, eid);
-    }
-    if !material_ids.is_empty() { writeln!(f)?; }
-
-    let mut sub_id = 1u32;
-    let mut mesh_entries: Vec<(usize, u32)> = Vec::new();
-
-    for (i, elem) in chunk.elements.iter().enumerate() {
-        let (mesh_data, name) = match elem {
-            SceneElement::Mesh { name, mesh_data, .. } => (mesh_data, name),
-            SceneElement::Instance { name, mesh_data, .. } => (mesh_data, name),
-        };
-        let res_name = format!("m{:03}", i);
-        let (w, h, d) = aabb_dims(mesh_data);
-
-        if name.starts_with("Tree_") {
-            let r = (w.max(d) * 0.45).max(0.1).min(2.0);
-            writeln!(f, "[sub_resource type=\"CylinderMesh\" id=\"{sub_id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "height = {:.2}", h.max(1.0))?;
-            writeln!(f, "top_radius = {:.2}", if h > 4.0 { 0.0 } else { r })?; // cone if tall
-            writeln!(f, "bottom_radius = {r:.2}")?;
-        } else if name.starts_with("Terrain_") {
-            writeln!(f, "[sub_resource type=\"PlaneMesh\" id=\"{sub_id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector2({:.2}, {:.2})", w.max(0.5), d.max(0.5))?;
-        } else if name.starts_with("Water_") || name.starts_with("Waterway_") {
-            writeln!(f, "[sub_resource type=\"PlaneMesh\" id=\"{sub_id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector2({:.2}, {:.2})", w.max(0.5), d.max(0.5))?;
-        } else if name.starts_with("Highway_") || name.starts_with("Railway_") {
-            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{sub_id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector3({:.2}, 0.15, {:.2})", w.max(0.3), d.max(0.3))?;
-        } else {
-            // Building wall or roof — BoxMesh with AABB dimensions
-            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{sub_id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector3({:.2}, {:.2}, {:.2})", w.max(0.3), h.max(0.5), d.max(0.3))?;
-        }
-        writeln!(f)?;
-        mesh_entries.push((i, sub_id));
-        sub_id += 1;
-    }
+    writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/chunk_mesh_loader.gd\" id=\"1\"]")?;
+    writeln!(f)?;
 
     // Root node
     let root_name = format!("Chunk_{}_{}", chunk.coord.0, chunk.coord.1);
     writeln!(f, "[node name=\"{root_name}\" type=\"Node3D\"]")?;
-    writeln!(f)?;
+    writeln!(f, "script = ExtResource(\"1\")")?;
+    writeln!(f, "mesh_data_path = \"res://mesh_data/{filename_base}.json\"", filename_base = root_name)?;
 
-    for (elem_idx, mid) in &mesh_entries {
-        let elem = &chunk.elements[*elem_idx];
+    Ok(())
+}
+
+fn write_chunk_mesh_data(chunk: &Chunk, mesh_data_dir: &Path) -> io::Result<()> {
+    let mut elements = Vec::new();
+
+    for elem in &chunk.elements {
         match elem {
-            SceneElement::Mesh { name, material_type, transform, .. } => {
-                writeln!(f, "[node name=\"{}\" type=\"MeshInstance3D\" parent=\".\"]", safe_name(name))?;
-                write_xform(&mut f, *transform)?;
-                writeln!(f, "mesh = SubResource(\"{mid}\")")?;
-                if let Some(&eid) = mat_ext_ids.get(material_type) {
-                    writeln!(f, "surface_material_override/0 = ExtResource(\"{eid}\")")?;
-                }
-                writeln!(f)?;
+            SceneElement::Mesh {
+                name,
+                mesh_data,
+                material_type,
+                transform,
+            } => {
+                elements.push(mesh_json(
+                    name,
+                    mesh_data,
+                    *material_type,
+                    *transform,
+                ));
             }
-            SceneElement::Instance { name, material_type, positions, .. } => {
+            SceneElement::Instance {
+                name,
+                mesh_data,
+                material_type,
+                positions,
+            } => {
                 for (pi, (pos, rot)) in positions.iter().enumerate() {
-                    writeln!(f, "[node name=\"{}_{}\" type=\"MeshInstance3D\" parent=\".\"]", safe_name(name), pi)?;
-                    write_xform_pr(&mut f, *pos, *rot)?;
-                    writeln!(f, "mesh = SubResource(\"{mid}\")")?;
-                    if let Some(&eid) = mat_ext_ids.get(material_type) {
-                        writeln!(f, "surface_material_override/0 = ExtResource(\"{eid}\")")?;
-                    }
-                    writeln!(f)?;
+                    elements.push(mesh_json(
+                        &format!("{name}_{pi}"),
+                        mesh_data,
+                        *material_type,
+                        transform_from_pos_rot(*pos, *rot),
+                    ));
                 }
             }
         }
     }
 
-    Ok(())
+    let payload = serde_json::json!({ "elements": elements });
+    let path = mesh_data_dir.join(format!("Chunk_{}_{}.json", chunk.coord.0, chunk.coord.1));
+    fs::write(path, serde_json::to_string(&payload)?)
 }
 
-fn aabb_dims(m: &crate::scene_writer::geometry::MeshData) -> (f32, f32, f32) {
-    let v = &m.vertices;
-    if v.is_empty() { return (1.0, 1.0, 1.0); }
-    let (mut mx, mut my, mut mz) = (f32::MAX, f32::MAX, f32::MAX);
-    let (mut Mx, mut My, mut Mz) = (f32::MIN, f32::MIN, f32::MIN);
-    for i in (0..v.len()).step_by(3) {
-        mx = mx.min(v[i]); Mx = Mx.max(v[i]);
-        my = my.min(v[i+1]); My = My.max(v[i+1]);
-        mz = mz.min(v[i+2]); Mz = Mz.max(v[i+2]);
-    }
-    (Mx - mx, My - my, Mz - mz)
+fn mesh_json(
+    name: &str,
+    mesh_data: &crate::scene_writer::geometry::MeshData,
+    material_type: MaterialType,
+    transform: [f32; 12],
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": safe_name(name),
+        "material": material_type.file_stem(),
+        "transform": transform,
+        "vertices": mesh_data.vertices,
+        "normals": mesh_data.normals,
+        "uvs": mesh_data.uvs,
+        "indices": mesh_data.indices,
+    })
 }
 
-fn write_xform(f: &mut fs::File, m: [f32; 12]) -> io::Result<()> {
-    write!(f, "transform = Transform3D(")?;
-    for (i, v) in m.iter().enumerate() {
-        if i > 0 { write!(f, ", ")?; }
-        if v.fract() == 0.0 { write!(f, "{}", *v as i32)?; }
-        else { write!(f, "{v:.4}")?; }
-    }
-    writeln!(f, ")")
-}
-
-fn write_xform_pr(f: &mut fs::File, pos: (f32, f32, f32), y_rot: f32) -> io::Result<()> {
+fn transform_from_pos_rot(pos: (f32, f32, f32), y_rot: f32) -> [f32; 12] {
     let (s, c) = y_rot.sin_cos();
-    write_xform(f, [c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c, pos.0, pos.1, pos.2])
+    [c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c, pos.0, pos.1, pos.2]
 }
 
 pub fn translation_transform(x: f32, y: f32, z: f32) -> [f32; 12] {
@@ -157,13 +121,26 @@ mod tests {
     use crate::scene_writer::geometry::MeshData;
 
     #[test]
-    fn chunk_scene_attaches_meshes_to_scene_root() {
+    fn chunk_scene_uses_runtime_array_mesh_loader() {
         let tmp = tempfile::tempdir().unwrap();
+        let mesh_data_dir = tmp.path().join("mesh_data");
+        std::fs::create_dir_all(&mesh_data_dir).unwrap();
         let mut material_ids = HashMap::new();
         material_ids.insert(MaterialType::BuildingWall, 1);
 
         let mut mesh = MeshData::new();
-        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        mesh.vertices.extend_from_slice(&[
+            0.0, 0.0, 0.0,
+            2.0, 0.0, 0.0,
+            0.0, 0.0, -2.0,
+        ]);
+        mesh.normals.extend_from_slice(&[
+            0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+        ]);
+        mesh.uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        mesh.indices.extend_from_slice(&[0, 1, 2]);
         let chunk = Chunk {
             coord: ChunkCoord(0, 0),
             world_bounds: (0, 0, 255, 255),
@@ -175,10 +152,18 @@ mod tests {
             }],
         };
 
-        write_chunk_scene(&chunk, tmp.path(), &material_ids).unwrap();
+        write_chunk_scene(&chunk, tmp.path(), &mesh_data_dir, &material_ids).unwrap();
 
         let scene = std::fs::read_to_string(tmp.path().join("Chunk_0_0.tscn")).unwrap();
-        assert!(scene.contains("[node name=\"BuildingWall_1\" type=\"MeshInstance3D\" parent=\".\"]"));
-        assert!(!scene.contains("parent=\"Chunk_0_0\""));
+        assert!(scene.contains("path=\"res://scripts/chunk_mesh_loader.gd\""));
+        assert!(scene.contains("mesh_data_path = \"res://mesh_data/Chunk_0_0.json\""));
+        assert!(!scene.contains("type=\"BoxMesh\""));
+        assert!(!scene.contains("type=\"PlaneMesh\""));
+
+        let mesh_data = std::fs::read_to_string(mesh_data_dir.join("Chunk_0_0.json")).unwrap();
+        assert!(mesh_data.contains("\"vertices\""));
+        assert!(mesh_data.contains("2.0"));
+        assert!(mesh_data.contains("\"indices\""));
+        assert!(mesh_data.contains("\"material\":\"building_wall\""));
     }
 }
