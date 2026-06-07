@@ -82,11 +82,11 @@ impl MaterialType {
             MaterialType::BuildingDoor => (0.28, 0.16, 0.08, 1.0),
             MaterialType::BuildingTrim => (0.78, 0.74, 0.65, 1.0),
             MaterialType::RooftopEquipment => (0.30, 0.32, 0.33, 1.0),
-            MaterialType::RoadAsphalt => (0.15, 0.15, 0.15, 1.0),
-            MaterialType::RoadSidewalk => (0.65, 0.65, 0.65, 1.0),
-            MaterialType::TerrainGrass => (0.25, 0.55, 0.15, 1.0),
-            MaterialType::TerrainDirt => (0.45, 0.35, 0.20, 1.0),
-            MaterialType::TerrainBuiltUp => (0.55, 0.50, 0.45, 1.0),
+            MaterialType::RoadAsphalt => (0.09, 0.10, 0.11, 1.0),
+            MaterialType::RoadSidewalk => (0.78, 0.74, 0.66, 1.0),
+            MaterialType::TerrainGrass => (0.34, 0.68, 0.23, 1.0),
+            MaterialType::TerrainDirt => (0.58, 0.43, 0.24, 1.0),
+            MaterialType::TerrainBuiltUp => (0.66, 0.61, 0.52, 1.0),
             MaterialType::Water => (0.10, 0.30, 0.60, 0.7),
             MaterialType::TreeLeaves => (0.15, 0.45, 0.10, 1.0),
             MaterialType::TreeTrunk => (0.35, 0.22, 0.12, 1.0),
@@ -182,8 +182,19 @@ pub fn write_material(mat_type: MaterialType, materials_dir: &Path) -> io::Resul
     writeln!(f)?;
     writeln!(f, "[resource]")?;
     writeln!(f, "albedo_color = Color({}, {}, {}, {})", r, g, b, a)?;
+    writeln!(f, "diffuse_mode = 3")?;
+    writeln!(f, "specular_mode = 1")?;
     writeln!(f, "roughness = {}", roughness)?;
     writeln!(f, "metallic = {}", metallic)?;
+
+    if matches!(
+        mat_type,
+        MaterialType::BuildingWindow | MaterialType::BuildingWallGlass | MaterialType::BuildingWallGreenhouse
+    ) {
+        writeln!(f, "emission_enabled = true")?;
+        writeln!(f, "emission = Color({}, {}, {}, 1)", r, g, b)?;
+        writeln!(f, "emission_energy_multiplier = 0.18")?;
+    }
 
     // Water gets transparency (Godot 4.x StandardMaterial3D)
     if a < 1.0 {
@@ -227,5 +238,28 @@ mod tests {
 
         assert!(wall.0 < 0.75 && wall.1 < 0.75 && wall.2 < 0.75);
         assert_ne!(wall, roof);
+    }
+
+    #[test]
+    fn terrain_and_roads_use_bright_readable_colors() {
+        let grass = MaterialType::TerrainGrass.albedo();
+        let sidewalk = MaterialType::RoadSidewalk.albedo();
+
+        assert!(grass.1 >= 0.65, "grass should read as saturated green: {grass:?}");
+        assert!(
+            sidewalk.0 >= 0.72 && sidewalk.1 >= 0.68,
+            "sidewalk should contrast against asphalt and buildings: {sidewalk:?}"
+        );
+    }
+
+    #[test]
+    fn generated_materials_use_toon_shading() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_material(MaterialType::TerrainGrass, tmp.path()).unwrap();
+
+        let material = std::fs::read_to_string(tmp.path().join("terrain_grass.tres")).unwrap();
+        assert!(material.contains("diffuse_mode = 3"));
+        assert!(material.contains("specular_mode = 1"));
     }
 }

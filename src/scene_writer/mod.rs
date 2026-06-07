@@ -182,8 +182,8 @@ impl SceneWriter {
             .filter(|c| !self.chunk_grid.chunks[c].elements.is_empty())
             .collect();
 
-        // load_steps = chunk PackedScenes + player script + environment + capsule shape.
-        let load_steps = non_empty.len() as u32 + 3;
+        // load_steps = chunk PackedScenes + player script + scene subresources.
+        let load_steps = non_empty.len() as u32 + 8;
         writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
         writeln!(f)?;
 
@@ -199,17 +199,48 @@ impl SceneWriter {
         writeln!(f)?;
 
         // Environment
-        writeln!(f, "[sub_resource type=\"Environment\" id=\"1\"]")?;
-        writeln!(f, "background_mode = 0")?; // Clear color
-        writeln!(f, "background_color = Color(0.45, 0.55, 0.70, 1)")?;
-        writeln!(f, "ambient_light_color = Color(0.4, 0.4, 0.45, 1)")?;
-        writeln!(f, "ambient_light_energy = 0.6")?;
+        writeln!(f, "[sub_resource type=\"ProceduralSkyMaterial\" id=\"1\"]")?;
+        writeln!(f, "sky_top_color = Color(0.23, 0.58, 0.96, 1)")?;
+        writeln!(f, "sky_horizon_color = Color(0.72, 0.88, 1, 1)")?;
+        writeln!(f, "ground_bottom_color = Color(0.32, 0.48, 0.28, 1)")?;
+        writeln!(f, "ground_horizon_color = Color(0.70, 0.82, 0.62, 1)")?;
+        writeln!(f, "sun_angle_max = 8.0")?;
+        writeln!(f, "sun_curve = 0.08")?;
+        writeln!(f)?;
+
+        writeln!(f, "[sub_resource type=\"Sky\" id=\"2\"]")?;
+        writeln!(f, "sky_material = SubResource(\"1\")")?;
+        writeln!(f)?;
+
+        writeln!(f, "[sub_resource type=\"Environment\" id=\"3\"]")?;
+        writeln!(f, "background_mode = 2")?;
+        writeln!(f, "sky = SubResource(\"2\")")?;
+        writeln!(f, "ambient_light_color = Color(0.78, 0.82, 0.88, 1)")?;
+        writeln!(f, "ambient_light_energy = 1.15")?;
         writeln!(f, "ambient_source = 3")?; // Color + Sky
         writeln!(f)?;
 
-        writeln!(f, "[sub_resource type=\"CapsuleShape3D\" id=\"2\"]")?;
+        writeln!(f, "[sub_resource type=\"CapsuleShape3D\" id=\"4\"]")?;
         writeln!(f, "radius = 0.35")?;
         writeln!(f, "height = 1.8")?;
+        writeln!(f)?;
+
+        writeln!(f, "[sub_resource type=\"SphereMesh\" id=\"5\"]")?;
+        writeln!(f, "radius = 1.0")?;
+        writeln!(f, "height = 2.0")?;
+        writeln!(f)?;
+
+        writeln!(f, "[sub_resource type=\"StandardMaterial3D\" id=\"6\"]")?;
+        writeln!(f, "albedo_color = Color(1, 0.82, 0.20, 1)")?;
+        writeln!(f, "emission_enabled = true")?;
+        writeln!(f, "emission = Color(1, 0.70, 0.12, 1)")?;
+        writeln!(f, "emission_energy_multiplier = 2.5")?;
+        writeln!(f)?;
+
+        writeln!(f, "[sub_resource type=\"StandardMaterial3D\" id=\"7\"]")?;
+        writeln!(f, "albedo_color = Color(1, 1, 1, 0.88)")?;
+        writeln!(f, "roughness = 1.0")?;
+        writeln!(f, "transparency = 1")?;
         writeln!(f)?;
 
         // Root
@@ -218,12 +249,14 @@ impl SceneWriter {
 
         // WorldEnvironment
         writeln!(f, "[node name=\"WorldEnvironment\" type=\"WorldEnvironment\" parent=\".\"]")?;
-        writeln!(f, "environment = SubResource(\"1\")")?;
+        writeln!(f, "environment = SubResource(\"3\")")?;
         writeln!(f)?;
 
         // DirectionalLight (sun)
         writeln!(f, "[node name=\"Sun\" type=\"DirectionalLight3D\" parent=\".\"]")?;
         writeln!(f, "transform = Transform3D(0.707, 0.408, -0.577, 0, 0.816, 0.577, 0.707, -0.408, 0.577, 0, 0, 0)")?;
+        writeln!(f, "light_color = Color(1, 0.92, 0.78, 1)")?;
+        writeln!(f, "light_energy = 2.4")?;
         writeln!(f, "shadow_enabled = true")?;
         writeln!(f)?;
 
@@ -233,16 +266,45 @@ impl SceneWriter {
         let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
         let span = span_x.max(span_z).max(1.0);
 
-        // Player starts above the south side of the generated bounds, facing into the city.
-        let player_y = (span * 0.08).clamp(10.0, 45.0);
+        // Player starts on the south side of the generated bounds, facing into the city.
         let player_z = world_cz + (span * 0.35).clamp(20.0, 120.0);
+        let player_x_blocks = (world_cx / self.godot_scale).round() as i32;
+        let player_z_blocks = (-player_z / self.godot_scale).round() as i32;
+        let player_y = self.ground_y_at(player_x_blocks, player_z_blocks) + 1.0;
+
+        writeln!(f, "[node name=\"SunDisk\" type=\"MeshInstance3D\" parent=\".\"]")?;
+        writeln!(f, "transform = Transform3D(5, 0, 0, 0, 5, 0, 0, 0, 5, {world_cx:.4}, 140.0000, {sun_z:.4})", sun_z = world_cz - span * 0.35)?;
+        writeln!(f, "mesh = SubResource(\"5\")")?;
+        writeln!(f, "material_override = SubResource(\"6\")")?;
+        writeln!(f)?;
+
+        writeln!(f, "[node name=\"Clouds\" type=\"Node3D\" parent=\".\"]")?;
+        writeln!(f)?;
+        for (i, (dx, dy, dz, sx, sy, sz)) in [
+            (-0.30, 92.0, -0.15, 14.0, 3.0, 7.0),
+            (-0.12, 96.0, -0.20, 10.0, 2.4, 5.0),
+            (0.18, 88.0, -0.10, 16.0, 3.2, 6.0),
+            (0.34, 102.0, 0.04, 12.0, 2.8, 5.5),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let cloud_x = world_cx + span * dx;
+            let cloud_z = world_cz + span * dz;
+            writeln!(f, "[node name=\"Cloud_{i}\" type=\"MeshInstance3D\" parent=\"Clouds\"]")?;
+            writeln!(f, "transform = Transform3D({sx}, 0, 0, 0, {sy}, 0, 0, 0, {sz}, {cloud_x:.4}, {dy:.4}, {cloud_z:.4})")?;
+            writeln!(f, "mesh = SubResource(\"5\")")?;
+            writeln!(f, "material_override = SubResource(\"7\")")?;
+            writeln!(f)?;
+        }
+
         writeln!(f, "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]")?;
         writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {world_cx:.4}, {player_y:.4}, {player_z:.4})")?;
         writeln!(f, "script = ExtResource(\"player_script\")")?;
         writeln!(f)?;
 
         writeln!(f, "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"Player\"]")?;
-        writeln!(f, "shape = SubResource(\"2\")")?;
+        writeln!(f, "shape = SubResource(\"4\")")?;
         writeln!(f)?;
 
         writeln!(f, "[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]")?;
@@ -281,7 +343,9 @@ impl SceneWriter {
         writeln!(f)?;
         writeln!(f, "@export var move_speed := 14.0")?;
         writeln!(f, "@export var sprint_multiplier := 2.0")?;
+        writeln!(f, "@export var jump_velocity := 5.5")?;
         writeln!(f, "@export var mouse_sensitivity := 0.0025")?;
+        writeln!(f, "var gravity := float(ProjectSettings.get_setting(\"physics/3d/default_gravity\"))")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
         writeln!(f)?;
@@ -299,18 +363,21 @@ impl SceneWriter {
         writeln!(f, "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)")?;
         writeln!(f, "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))")?;
         writeln!(f)?;
-        writeln!(f, "func _physics_process(_delta: float) -> void:")?;
+        writeln!(f, "func _physics_process(delta: float) -> void:")?;
         writeln!(f, "\tvar input_dir := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_backward\")")?;
         writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
-        writeln!(f, "\tvar vertical := 0.0")?;
-        writeln!(f, "\tif Input.is_action_pressed(\"jump\"):")?;
-        writeln!(f, "\t\tvertical += 1.0")?;
-        writeln!(f, "\tif Input.is_action_pressed(\"descend\"):")?;
-        writeln!(f, "\t\tvertical -= 1.0")?;
         writeln!(f, "\tvar speed := move_speed")?;
         writeln!(f, "\tif Input.is_action_pressed(\"sprint\"):")?;
         writeln!(f, "\t\tspeed *= sprint_multiplier")?;
-        writeln!(f, "\tvelocity = Vector3(direction.x * speed, vertical * speed, direction.z * speed)")?;
+        writeln!(f, "\tvelocity.x = direction.x * speed")?;
+        writeln!(f, "\tvelocity.z = direction.z * speed")?;
+        writeln!(f, "\tif is_on_floor():")?;
+        writeln!(f, "\t\tif Input.is_action_just_pressed(\"jump\"):")?;
+        writeln!(f, "\t\t\tvelocity.y = jump_velocity")?;
+        writeln!(f, "\t\telse:")?;
+        writeln!(f, "\t\t\tvelocity.y = -0.1")?;
+        writeln!(f, "\telse:")?;
+        writeln!(f, "\t\tvelocity.y -= gravity * delta")?;
         writeln!(f, "\tmove_and_slide()")?;
 
         Ok(())
@@ -366,12 +433,35 @@ impl SceneWriter {
         writeln!(f, "\tinstance.name = str(element.get(\"name\", \"Mesh\"))")?;
         writeln!(f, "\tinstance.mesh = mesh")?;
         writeln!(f, "\tinstance.transform = _to_transform(element.get(\"transform\", []))")?;
-        writeln!(f, "\tvar material = load(\"res://materials/\" + str(element.get(\"material\", \"terrain_grass\")) + \".tres\")")?;
+        writeln!(f, "\tvar material_name := str(element.get(\"material\", \"terrain_grass\"))")?;
+        writeln!(f, "\tvar material = load(\"res://materials/\" + material_name + \".tres\")")?;
         writeln!(f, "\tif material != null:")?;
         writeln!(f, "\t\tinstance.set_surface_override_material(0, material)")?;
         writeln!(f, "\tinstance.set_meta(\"osm_generated\", true)")?;
         writeln!(f, "\tadd_child(instance)")?;
         writeln!(f, "\tinstance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner")?;
+        writeln!(f, "\tif _should_add_collision(material_name):")?;
+        writeln!(f, "\t\t_add_collision_body(str(instance.name), mesh, instance.transform)")?;
+        writeln!(f)?;
+        writeln!(f, "func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:")?;
+        writeln!(f, "\tvar body := StaticBody3D.new()")?;
+        writeln!(f, "\tbody.name = source_name + \"_Collision\"")?;
+        writeln!(f, "\tbody.transform = source_transform")?;
+        writeln!(f, "\tbody.set_meta(\"osm_generated\", true)")?;
+        writeln!(f, "\tvar shape := CollisionShape3D.new()")?;
+        writeln!(f, "\tshape.shape = mesh.create_trimesh_shape()")?;
+        writeln!(f, "\tbody.add_child(shape)")?;
+        writeln!(f, "\tadd_child(body)")?;
+        writeln!(f, "\tbody.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner")?;
+        writeln!(f, "\tshape.owner = body.owner")?;
+        writeln!(f)?;
+        writeln!(f, "func _should_add_collision(material_name: String) -> bool:")?;
+        writeln!(f, "\treturn not (")?;
+        writeln!(f, "\t\tmaterial_name == \"water\"")?;
+        writeln!(f, "\t\tor material_name == \"tree_leaves\"")?;
+        writeln!(f, "\t\tor material_name == \"building_window\"")?;
+        writeln!(f, "\t\tor material_name == \"building_trim\"")?;
+        writeln!(f, "\t)")?;
         writeln!(f)?;
         writeln!(f, "func _to_vec3_array(values: Array) -> PackedVector3Array:")?;
         writeln!(f, "\tvar out := PackedVector3Array()")?;
@@ -498,5 +588,78 @@ mod tests {
         assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]"));
         assert!(master.contains("current = true"));
         assert!(tmp.path().join("scripts").join("fps_player.gd").exists());
+    }
+
+    #[test]
+    fn master_scene_has_bright_stylized_sky_sun_and_clouds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[sub_resource type=\"ProceduralSkyMaterial\""));
+        assert!(master.contains("[sub_resource type=\"Sky\""));
+        assert!(master.contains("background_mode = 2"));
+        assert!(master.contains("[node name=\"SunDisk\" type=\"MeshInstance3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"Clouds\" type=\"Node3D\" parent=\".\"]"));
+        assert!(master.contains("light_energy = 2.4"));
+    }
+
+    #[test]
+    fn master_scene_spawns_player_on_flat_ground() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let player_line = master
+            .lines()
+            .skip_while(|line| !line.contains("[node name=\"Player\""))
+            .find(|line| line.starts_with("transform = Transform3D"))
+            .unwrap();
+        assert!(
+            player_line.contains(", 1.0000, "),
+            "player should spawn with capsule near flat ground: {player_line}"
+        );
+    }
+
+    #[test]
+    fn fps_player_script_uses_gravity_and_floor_motion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        assert!(script.contains("default_gravity"));
+        assert!(script.contains("is_on_floor()"));
+        assert!(script.contains("@export var jump_velocity"));
+        assert!(script.contains("velocity.y -= gravity * delta"));
+        assert!(!script.contains("var vertical := 0.0"));
+    }
+
+    #[test]
+    fn chunk_loader_creates_collision_for_solid_meshes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd")).unwrap();
+        assert!(script.contains("StaticBody3D.new()"));
+        assert!(script.contains("CollisionShape3D.new()"));
+        assert!(script.contains("mesh.create_trimesh_shape()"));
+        assert!(script.contains("func _should_add_collision(material_name: String) -> bool:"));
     }
 }
