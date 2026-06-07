@@ -1,0 +1,23 @@
+# Reference project (read-only, not part of this project)
+refs/
+
+# Build artifacts
+target/
+debug/
+release/
+
+# Generated output directories
+test_output/
+output/
+*.log
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
