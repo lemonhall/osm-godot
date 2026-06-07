@@ -186,6 +186,11 @@ pub fn write_material(mat_type: MaterialType, materials_dir: &Path) -> io::Resul
     writeln!(f, "specular_mode = 1")?;
     writeln!(f, "roughness = {}", roughness)?;
     writeln!(f, "metallic = {}", metallic)?;
+    if a >= 1.0 {
+        writeln!(f, "rim_enabled = true")?;
+        writeln!(f, "rim = 0.28")?;
+        writeln!(f, "rim_tint = 0.35")?;
+    }
 
     if matches!(
         mat_type,
@@ -261,5 +266,6 @@ mod tests {
         let material = std::fs::read_to_string(tmp.path().join("terrain_grass.tres")).unwrap();
         assert!(material.contains("diffuse_mode = 3"));
         assert!(material.contains("specular_mode = 1"));
+        assert!(material.contains("rim_enabled = true"));
     }
 }

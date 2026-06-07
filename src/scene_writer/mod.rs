@@ -21,7 +21,7 @@ pub mod tscn_writer;
 
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::ground::Ground;
-use chunk_grid::ChunkGrid;
+use chunk_grid::{ChunkGrid, SceneElement};
 use geometry::MeshData;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -124,14 +124,17 @@ impl SceneWriter {
         let materials_dir = self.output_dir.join("materials");
         let scripts_dir = self.output_dir.join("scripts");
         let mesh_data_dir = self.output_dir.join("mesh_data");
+        let assets_dir = self.output_dir.join("assets");
 
         fs::create_dir_all(&scenes_dir)?;
         fs::create_dir_all(&materials_dir)?;
         fs::create_dir_all(&scripts_dir)?;
         fs::create_dir_all(&mesh_data_dir)?;
+        fs::create_dir_all(&assets_dir)?;
 
         // Write materials
         tres_writer::write_all_materials(&materials_dir)?;
+        self.write_cloud_texture_asset(&assets_dir)?;
         self.write_fps_player_script(&scripts_dir)?;
         self.write_chunk_mesh_loader_script(&scripts_dir)?;
 
@@ -182,12 +185,13 @@ impl SceneWriter {
             .filter(|c| !self.chunk_grid.chunks[c].elements.is_empty())
             .collect();
 
-        // load_steps = chunk PackedScenes + player script + scene subresources.
+        // load_steps = chunk PackedScenes + script/texture resources + scene subresources.
         let load_steps = non_empty.len() as u32 + 8;
         writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
         writeln!(f)?;
 
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
+        writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.svg\" id=\"cloud_texture\"]")?;
 
         // Ext resources: each chunk PackedScene
         let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
@@ -237,12 +241,6 @@ impl SceneWriter {
         writeln!(f, "emission_energy_multiplier = 2.5")?;
         writeln!(f)?;
 
-        writeln!(f, "[sub_resource type=\"StandardMaterial3D\" id=\"7\"]")?;
-        writeln!(f, "albedo_color = Color(1, 1, 1, 0.88)")?;
-        writeln!(f, "roughness = 1.0")?;
-        writeln!(f, "transparency = 1")?;
-        writeln!(f)?;
-
         // Root
         writeln!(f, "[node name=\"World\" type=\"Node3D\"]")?;
         writeln!(f)?;
@@ -266,11 +264,7 @@ impl SceneWriter {
         let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
         let span = span_x.max(span_z).max(1.0);
 
-        // Player starts on the south side of the generated bounds, facing into the city.
-        let player_z = world_cz + (span * 0.35).clamp(20.0, 120.0);
-        let player_x_blocks = (world_cx / self.godot_scale).round() as i32;
-        let player_z_blocks = (-player_z / self.godot_scale).round() as i32;
-        let player_y = self.ground_y_at(player_x_blocks, player_z_blocks) + 1.0;
+        let (player_x, player_y, player_z) = self.player_spawn_godot(world_cx, world_cz, span);
 
         writeln!(f, "[node name=\"SunDisk\" type=\"MeshInstance3D\" parent=\".\"]")?;
         writeln!(f, "transform = Transform3D(5, 0, 0, 0, 5, 0, 0, 0, 5, {world_cx:.4}, 140.0000, {sun_z:.4})", sun_z = world_cz - span * 0.35)?;
@@ -280,7 +274,7 @@ impl SceneWriter {
 
         writeln!(f, "[node name=\"Clouds\" type=\"Node3D\" parent=\".\"]")?;
         writeln!(f)?;
-        for (i, (dx, dy, dz, sx, sy, sz)) in [
+        for (i, (dx, dy, dz, sx, _sy, sz)) in [
             (-0.30, 92.0, -0.15, 14.0, 3.0, 7.0),
             (-0.12, 96.0, -0.20, 10.0, 2.4, 5.0),
             (0.18, 88.0, -0.10, 16.0, 3.2, 6.0),
@@ -291,15 +285,20 @@ impl SceneWriter {
         {
             let cloud_x = world_cx + span * dx;
             let cloud_z = world_cz + span * dz;
-            writeln!(f, "[node name=\"Cloud_{i}\" type=\"MeshInstance3D\" parent=\"Clouds\"]")?;
-            writeln!(f, "transform = Transform3D({sx}, 0, 0, 0, {sy}, 0, 0, 0, {sz}, {cloud_x:.4}, {dy:.4}, {cloud_z:.4})")?;
-            writeln!(f, "mesh = SubResource(\"5\")")?;
-            writeln!(f, "material_override = SubResource(\"7\")")?;
+            let pixel_size = 0.055 * f32::max(*sx, *sz);
+            writeln!(f, "[node name=\"Cloud_{i}\" type=\"Sprite3D\" parent=\"Clouds\"]")?;
+            writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {cloud_x:.4}, {dy:.4}, {cloud_z:.4})")?;
+            writeln!(f, "billboard = 1")?;
+            writeln!(f, "transparent = true")?;
+            writeln!(f, "modulate = Color(1, 1, 1, 0.92)")?;
+            writeln!(f, "pixel_size = {pixel_size:.4}")?;
+            writeln!(f, "texture = ExtResource(\"cloud_texture\")")?;
             writeln!(f)?;
         }
 
         writeln!(f, "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]")?;
-        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {world_cx:.4}, {player_y:.4}, {player_z:.4})")?;
+        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {player_x:.4}, {player_y:.4}, {player_z:.4})")?;
+        writeln!(f, "floor_snap_length = 0.35")?;
         writeln!(f, "script = ExtResource(\"player_script\")")?;
         writeln!(f)?;
 
@@ -333,6 +332,85 @@ impl SceneWriter {
         Ok(())
     }
 
+    fn player_spawn_godot(&self, world_cx: f32, world_cz: f32, span: f32) -> (f32, f32, f32) {
+        if let Some(spawn) = self.find_walkable_spawn_godot(world_cx, world_cz) {
+            return spawn;
+        }
+
+        let player_z = world_cz + (span * 0.35).clamp(20.0, 120.0);
+        let player_x_blocks = (world_cx / self.godot_scale).round() as i32;
+        let player_z_blocks = (-player_z / self.godot_scale).round() as i32;
+        let player_y = self.ground_y_at(player_x_blocks, player_z_blocks) + 1.0;
+        (world_cx, player_y, player_z)
+    }
+
+    fn find_walkable_spawn_godot(&self, world_cx: f32, world_cz: f32) -> Option<(f32, f32, f32)> {
+        let mut best: Option<(u8, f32, f32, f32, f32)> = None;
+
+        for chunk in self.chunk_grid.chunks.values() {
+            let chunk_x = chunk.world_bounds.0 as f32 * self.godot_scale;
+            let chunk_z = -(chunk.world_bounds.1 as f32) * self.godot_scale;
+
+            for element in &chunk.elements {
+                let SceneElement::Mesh {
+                    material_type,
+                    transform,
+                    ..
+                } = element
+                else {
+                    continue;
+                };
+                let Some(priority) = spawn_material_priority(*material_type) else {
+                    continue;
+                };
+
+                let x = chunk_x + transform[9];
+                let y = transform[10] + 1.0;
+                let z = chunk_z + transform[11];
+                let distance2 = (x - world_cx).powi(2) + (z - world_cz).powi(2);
+
+                let should_replace = best
+                    .map(|(best_priority, best_distance2, _, _, _)| {
+                        priority < best_priority
+                            || (priority == best_priority && distance2 < best_distance2)
+                    })
+                    .unwrap_or(true);
+                if should_replace {
+                    best = Some((priority, distance2, x, y, z));
+                }
+            }
+        }
+
+        best.map(|(_, _, x, y, z)| (x, y, z))
+    }
+
+    fn write_cloud_texture_asset(&self, assets_dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = assets_dir.join("cloud_billboard.svg");
+        let mut f = std::fs::File::create(&path)?;
+
+        writeln!(
+            f,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"192\" viewBox=\"0 0 512 192\">"
+        )?;
+        writeln!(f, "<rect width=\"512\" height=\"192\" fill=\"none\"/>")?;
+        writeln!(f, "<g fill=\"#ffffff\" fill-opacity=\"0.92\">")?;
+        writeln!(f, "<ellipse cx=\"154\" cy=\"112\" rx=\"118\" ry=\"42\"/>")?;
+        writeln!(f, "<ellipse cx=\"260\" cy=\"102\" rx=\"132\" ry=\"50\"/>")?;
+        writeln!(f, "<ellipse cx=\"360\" cy=\"118\" rx=\"98\" ry=\"38\"/>")?;
+        writeln!(f, "<circle cx=\"210\" cy=\"78\" r=\"48\"/>")?;
+        writeln!(f, "<circle cx=\"298\" cy=\"70\" r=\"58\"/>")?;
+        writeln!(f, "<circle cx=\"364\" cy=\"88\" r=\"44\"/>")?;
+        writeln!(f, "</g>")?;
+        writeln!(f, "<g fill=\"#d7ecff\" fill-opacity=\"0.35\">")?;
+        writeln!(f, "<ellipse cx=\"262\" cy=\"132\" rx=\"164\" ry=\"26\"/>")?;
+        writeln!(f, "</g>")?;
+        writeln!(f, "</svg>")?;
+
+        Ok(())
+    }
+
     fn write_fps_player_script(&self, scripts_dir: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
@@ -343,11 +421,14 @@ impl SceneWriter {
         writeln!(f)?;
         writeln!(f, "@export var move_speed := 14.0")?;
         writeln!(f, "@export var sprint_multiplier := 2.0")?;
+        writeln!(f, "@export var noclip_speed_multiplier := 2.5")?;
         writeln!(f, "@export var jump_velocity := 5.5")?;
         writeln!(f, "@export var mouse_sensitivity := 0.0025")?;
         writeln!(f, "var gravity := float(ProjectSettings.get_setting(\"physics/3d/default_gravity\"))")?;
+        writeln!(f, "var noclip := false")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
+        writeln!(f, "@onready var collision_shape: CollisionShape3D = $CollisionShape3D")?;
         writeln!(f)?;
         writeln!(f, "func _ready() -> void:")?;
         writeln!(f, "\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
@@ -358,6 +439,9 @@ impl SceneWriter {
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)")?;
         writeln!(f, "\t\telse:")?;
         writeln!(f, "\t\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
+        writeln!(f, "\tif event.is_action_pressed(\"noclip_toggle\"):")?;
+        writeln!(f, "\t\tnoclip = not noclip")?;
+        writeln!(f, "\t\tcollision_shape.disabled = noclip")?;
         writeln!(f, "\tif event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:")?;
         writeln!(f, "\t\trotate_y(-event.relative.x * mouse_sensitivity)")?;
         writeln!(f, "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)")?;
@@ -369,6 +453,9 @@ impl SceneWriter {
         writeln!(f, "\tvar speed := move_speed")?;
         writeln!(f, "\tif Input.is_action_pressed(\"sprint\"):")?;
         writeln!(f, "\t\tspeed *= sprint_multiplier")?;
+        writeln!(f, "\tif noclip:")?;
+        writeln!(f, "\t\t_noclip_move(delta, direction, speed * noclip_speed_multiplier)")?;
+        writeln!(f, "\t\treturn")?;
         writeln!(f, "\tvelocity.x = direction.x * speed")?;
         writeln!(f, "\tvelocity.z = direction.z * speed")?;
         writeln!(f, "\tif is_on_floor():")?;
@@ -379,6 +466,15 @@ impl SceneWriter {
         writeln!(f, "\telse:")?;
         writeln!(f, "\t\tvelocity.y -= gravity * delta")?;
         writeln!(f, "\tmove_and_slide()")?;
+        writeln!(f)?;
+        writeln!(f, "func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:")?;
+        writeln!(f, "\tvar vertical := 0.0")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"jump\"):")?;
+        writeln!(f, "\t\tvertical += 1.0")?;
+        writeln!(f, "\tif Input.is_action_pressed(\"descend\"):")?;
+        writeln!(f, "\t\tvertical -= 1.0")?;
+        writeln!(f, "\tglobal_position += (direction + Vector3.UP * vertical).normalized() * speed * delta")?;
+        writeln!(f, "\tvelocity = Vector3.ZERO")?;
 
         Ok(())
     }
@@ -508,6 +604,15 @@ impl SceneWriter {
     }
 }
 
+fn spawn_material_priority(material_type: MaterialType) -> Option<u8> {
+    match material_type {
+        MaterialType::RoadSidewalk => Some(0),
+        MaterialType::RoadAsphalt => Some(1),
+        MaterialType::TerrainGrass | MaterialType::TerrainBuiltUp | MaterialType::TerrainDirt => Some(2),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +714,23 @@ mod tests {
     }
 
     #[test]
+    fn master_scene_uses_cloud_billboards_instead_of_blob_meshes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(tmp.path().join("assets").join("cloud_billboard.svg").exists());
+        assert!(master.contains("[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.svg\" id=\"cloud_texture\"]"));
+        assert!(master.contains("[node name=\"Cloud_0\" type=\"Sprite3D\" parent=\"Clouds\"]"));
+        assert!(master.contains("texture = ExtResource(\"cloud_texture\")"));
+        assert!(!master.contains("[node name=\"Cloud_0\" type=\"MeshInstance3D\" parent=\"Clouds\"]"));
+    }
+
+    #[test]
     fn master_scene_spawns_player_on_flat_ground() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
@@ -630,6 +752,34 @@ mod tests {
     }
 
     #[test]
+    fn master_scene_prefers_road_spawn_for_walkable_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.add_mesh(
+            "Road_1".to_string(),
+            unit_mesh(),
+            MaterialType::RoadAsphalt,
+            300,
+            150,
+        );
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let player_line = master
+            .lines()
+            .skip_while(|line| !line.contains("[node name=\"Player\""))
+            .find(|line| line.starts_with("transform = Transform3D"))
+            .unwrap();
+        assert!(
+            player_line.contains(", 150.0000, 1.0000, -75.0000)"),
+            "player should spawn on the road mesh transform: {player_line}"
+        );
+    }
+
+    #[test]
     fn fps_player_script_uses_gravity_and_floor_motion() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
@@ -643,7 +793,23 @@ mod tests {
         assert!(script.contains("is_on_floor()"));
         assert!(script.contains("@export var jump_velocity"));
         assert!(script.contains("velocity.y -= gravity * delta"));
-        assert!(!script.contains("var vertical := 0.0"));
+        assert!(!script.contains("vertical * speed"));
+    }
+
+    #[test]
+    fn fps_player_script_has_noclip_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        assert!(script.contains("var noclip := false"));
+        assert!(script.contains("noclip_toggle"));
+        assert!(script.contains("func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:"));
+        assert!(script.contains("collision_shape.disabled = noclip"));
     }
 
     #[test]
