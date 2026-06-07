@@ -21,7 +21,7 @@ pub fn generate_terrain(chunk_grid: &mut ChunkGrid, ground: &Arc<Ground>, godot_
         let (min_x, min_z, _, _) = chunk.world_bounds;
 
         // Determine material based on land cover
-        let material = if let Some(lc) = ground.land_cover_grid() {
+        let material = if ground.land_cover_grid().is_some() {
             // Sample center of chunk for land cover
             let cx = min_x + chunk_grid.chunk_size / 2;
             let cz = min_z + chunk_grid.chunk_size / 2;
@@ -191,12 +191,30 @@ fn land_cover_to_material(lc_class: u8) -> MaterialType {
 mod tests {
     use super::*;
     use crate::coordinate_system::cartesian::XZBBox;
+    use crate::scene_writer::geometry::MeshData;
+    use crate::scene_writer::tres_writer::MaterialType;
+
+    fn unit_mesh() -> MeshData {
+        let mut mesh = MeshData::new();
+        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
+        mesh
+    }
 
     #[test]
     fn terrain_mesh_is_local_to_its_chunk() {
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let mut chunk_grid = ChunkGrid::new(&bbox, 256);
         let ground = Arc::new(Ground::new_flat(0));
+        chunk_grid.add_mesh_element(
+            "Seed".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            300,
+            300,
+            0.5,
+            0.0,
+            Default::default(),
+        );
 
         generate_terrain(&mut chunk_grid, &ground, 0.5);
 
@@ -234,6 +252,16 @@ mod tests {
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let mut chunk_grid = ChunkGrid::new(&bbox, 256);
         let ground = Arc::new(Ground::new_flat(0));
+        chunk_grid.add_mesh_element(
+            "Seed".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            10,
+            10,
+            0.5,
+            0.0,
+            Default::default(),
+        );
 
         generate_terrain(&mut chunk_grid, &ground, 0.5);
 
@@ -255,5 +283,42 @@ mod tests {
         };
 
         assert!(mesh_data.normals.chunks(3).all(|normal| normal[1] > 0.0));
+    }
+
+    #[test]
+    fn terrain_generation_does_not_create_empty_chunks_for_large_bbox() {
+        let bbox = XZBBox::rect_from_xz_lengths(120_000.0, 130_000.0).unwrap();
+        let mut chunk_grid = ChunkGrid::new(&bbox, 128);
+        let ground = Arc::new(Ground::new_flat(0));
+
+        generate_terrain(&mut chunk_grid, &ground, 0.5);
+        assert_eq!(chunk_grid.chunk_count(), 0);
+
+        chunk_grid.add_mesh_element(
+            "Seed".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            42,
+            42,
+            0.5,
+            0.0,
+            Default::default(),
+        );
+        generate_terrain(&mut chunk_grid, &ground, 0.5);
+
+        assert_eq!(chunk_grid.chunk_count(), 1);
+        let chunk = &chunk_grid.chunks[&ChunkCoord(0, 0)];
+        let terrain_count = chunk
+            .elements
+            .iter()
+            .filter(|element| {
+                matches!(
+                    element,
+                    crate::scene_writer::chunk_grid::SceneElement::Mesh { name, .. }
+                        if name == "Terrain_0_0"
+                )
+            })
+            .count();
+        assert_eq!(terrain_count, 1);
     }
 }

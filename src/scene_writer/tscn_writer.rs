@@ -93,9 +93,6 @@ fn write_chunk_mesh_data(chunk: &Chunk, mesh_data_dir: &Path) -> io::Result<()> 
                 transform,
                 metadata,
             } => {
-                if is_road_material(*material_type) {
-                    continue;
-                }
                 elements.push(mesh_json(
                     name,
                     mesh_data,
@@ -278,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn chunk_mesh_data_excludes_roads_for_independent_road_scene() {
+    fn chunk_mesh_data_includes_roads_for_world_streaming() {
         let tmp = tempfile::tempdir().unwrap();
         let mesh_data_dir = tmp.path().join("mesh_data");
         std::fs::create_dir_all(&mesh_data_dir).unwrap();
@@ -318,8 +315,8 @@ mod tests {
         write_chunk_scene(&chunk, tmp.path(), &mesh_data_dir, &material_ids).unwrap();
 
         let mesh_data = std::fs::read_to_string(mesh_data_dir.join("Chunk_0_0.json")).unwrap();
-        assert!(!mesh_data.contains("\"name\":\"Highway_1\""));
-        assert!(!mesh_data.contains("\"material\":\"road_asphalt\""));
+        assert!(mesh_data.contains("\"name\":\"Highway_1\""));
+        assert!(mesh_data.contains("\"material\":\"road_asphalt\""));
         assert!(mesh_data.contains("\"name\":\"BuildingWall_1\""));
     }
 
@@ -455,6 +452,48 @@ mod tests {
         assert_eq!(metadata["osm_id"], "200");
         assert_eq!(metadata["osm_kind"], "road");
         assert_eq!(metadata["name"], "Zhongshan East 1st Road");
+        assert_eq!(metadata["highway"], "primary");
+    }
+
+    #[test]
+    fn world_streaming_chunk_mesh_data_keeps_roads_with_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mesh_data_dir = tmp.path().join("mesh_data");
+        std::fs::create_dir_all(&mesh_data_dir).unwrap();
+
+        let mut road_mesh = MeshData::new();
+        road_mesh
+            .vertices
+            .extend_from_slice(&[0.0, 0.0, 0.0, 4.0, 0.0, -4.0]);
+        road_mesh.indices.extend_from_slice(&[0, 1, 0]);
+        let chunk = Chunk {
+            coord: ChunkCoord(0, 0),
+            world_bounds: (0, 0, 255, 255),
+            elements: vec![SceneElement::Mesh {
+                name: "Highway_200".to_string(),
+                mesh_data: road_mesh,
+                material_type: MaterialType::RoadAsphalt,
+                transform: translation_transform(10.0, 0.0, -10.0),
+                metadata: [
+                    ("osm_id".to_string(), "200".to_string()),
+                    ("osm_kind".to_string(), "road".to_string()),
+                    ("name".to_string(), "Chunked Road".to_string()),
+                    ("highway".to_string(), "primary".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        };
+
+        write_chunk_scene(&chunk, tmp.path(), &mesh_data_dir, &HashMap::new()).unwrap();
+
+        let chunk_data = std::fs::read_to_string(mesh_data_dir.join("Chunk_0_0.json")).unwrap();
+        assert!(chunk_data.contains("\"name\":\"Highway_200\""));
+        assert!(chunk_data.contains("\"material\":\"road_asphalt\""));
+        let parsed: serde_json::Value = serde_json::from_str(&chunk_data).unwrap();
+        let metadata = &parsed["elements"][0]["metadata"];
+        assert_eq!(metadata["osm_kind"], "road");
+        assert_eq!(metadata["name"], "Chunked Road");
         assert_eq!(metadata["highway"], "primary");
     }
 }

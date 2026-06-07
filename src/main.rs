@@ -53,6 +53,14 @@ fn run() {
     println!("{} Fetching OSM data...", "[1/6]".bold());
     let raw_data = match &args.file {
         Some(file) => retrieve_data::fetch_data_from_file(file),
+        None if args.tiled_fetch => retrieve_data::fetch_data_from_overpass_tiled(
+            args.bbox,
+            args.debug,
+            args.downloader.as_str(),
+            args.save_json_file.as_deref(),
+            args.fetch_tile_degrees,
+            args.tile_cache_dir.as_deref(),
+        ),
         None => retrieve_data::fetch_data_from_overpass(
             args.bbox,
             args.debug,
@@ -97,14 +105,11 @@ fn run() {
         args.chunk_size,
     )
     .expect("Failed to process elements");
+    scene.stream_radius = args.stream_radius;
 
     // ── 5. Generate terrain meshes ────────────────────────────────────
     println!("{} Generating terrain...", "[5/6]".bold());
-    ground_generation::generate_terrain(
-        &mut scene.chunk_grid,
-        &ground,
-        args.godot_scale,
-    );
+    ground_generation::generate_terrain(&mut scene.chunk_grid, &ground, args.godot_scale);
 
     // ── 6. Save all scenes ────────────────────────────────────────────
     println!("{} Saving Godot scenes...", "[6/6]".bold());

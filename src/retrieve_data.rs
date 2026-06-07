@@ -8,8 +8,10 @@ use reqwest::blocking::Client;
 use reqwest::blocking::ClientBuilder;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader, Cursor, Write};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -341,6 +343,194 @@ pub fn fetch_data_from_overpass(
     }
 }
 
+pub fn split_bbox_for_tiled_fetch(bbox: LLBBox, tile_degrees: f64) -> Result<Vec<LLBBox>, String> {
+    if !tile_degrees.is_finite() || tile_degrees <= 0.0 {
+        return Err("tile_degrees must be a positive finite number".to_string());
+    }
+
+    let mut tiles = Vec::new();
+    let mut lat = bbox.min().lat();
+    while lat < bbox.max().lat() {
+        let next_lat = (lat + tile_degrees).min(bbox.max().lat());
+        let mut lng = bbox.min().lng();
+        while lng < bbox.max().lng() {
+            let next_lng = (lng + tile_degrees).min(bbox.max().lng());
+            tiles.push(LLBBox::new(lat, lng, next_lat, next_lng)?);
+            lng = next_lng;
+        }
+        lat = next_lat;
+    }
+
+    Ok(tiles)
+}
+
+pub fn merge_tiled_osm_data(parts: Vec<OsmData>) -> OsmData {
+    let mut seen: HashSet<(String, u64)> = HashSet::new();
+    let mut elements = Vec::new();
+    let mut remarks = Vec::new();
+
+    for part in parts {
+        if let Some(remark) = part.remark {
+            remarks.push(remark);
+        }
+        for element in part.elements {
+            let key = (element.r#type.clone(), element.id);
+            if seen.insert(key) {
+                elements.push(element);
+            }
+        }
+    }
+
+    OsmData {
+        elements,
+        remark: if remarks.is_empty() {
+            None
+        } else {
+            Some(remarks.join("\n"))
+        },
+    }
+}
+
+pub fn fetch_data_from_overpass_tiled(
+    bbox: LLBBox,
+    debug: bool,
+    download_method: &str,
+    save_file: Option<&str>,
+    tile_degrees: f64,
+    tile_cache_dir: Option<&Path>,
+) -> Result<OsmData, Box<dyn std::error::Error>> {
+    println!(
+        "{} Fetching OSM data as tiled Overpass requests...",
+        "[1/7]".bold()
+    );
+    let tiles = split_bbox_for_tiled_fetch(bbox, tile_degrees)?;
+    println!("  {} fetch tiles", tiles.len().to_string().bright_white());
+
+    if let Some(cache_dir) = tile_cache_dir {
+        std::fs::create_dir_all(cache_dir)?;
+    }
+
+    let mut parts = Vec::new();
+    let mut tile_sequence = 0usize;
+    for (idx, tile) in tiles.iter().enumerate() {
+        println!("  Fetching tile {} / {}: {:?}", idx + 1, tiles.len(), tile);
+        let mut tile_parts = fetch_tile_adaptive(
+            *tile,
+            debug,
+            download_method,
+            tile_cache_dir,
+            tile_degrees,
+            (tile_degrees / 4.0).max(0.02),
+            &mut tile_sequence,
+        )?;
+        parts.append(&mut tile_parts);
+    }
+
+    let merged = merge_tiled_osm_data(parts);
+    println!(
+        "  Merged tiled OSM data: {} unique elements",
+        merged.elements.len().to_string().bright_white()
+    );
+
+    if let Some(save_file) = save_file {
+        let mut file = File::create(save_file)?;
+        serde_json::to_writer(&mut file, &merged)?;
+        println!("Merged API response saved to: {save_file}");
+    }
+
+    Ok(merged)
+}
+
+fn fetch_tile_adaptive(
+    tile: LLBBox,
+    debug: bool,
+    download_method: &str,
+    tile_cache_dir: Option<&Path>,
+    current_tile_degrees: f64,
+    min_tile_degrees: f64,
+    tile_sequence: &mut usize,
+) -> Result<Vec<OsmData>, Box<dyn std::error::Error>> {
+    if let Some(path) = find_cached_tile(tile_cache_dir, tile) {
+        println!("  Loading cached tile: {}", path.display());
+        return Ok(vec![fetch_data_from_file(path.to_string_lossy().as_ref())?]);
+    }
+
+    let cache_path = tile_cache_dir.map(|dir| tile_cache_path(dir, tile, *tile_sequence));
+    *tile_sequence += 1;
+    let cache_file = cache_path.as_ref().map(|p| p.to_string_lossy().to_string());
+
+    match fetch_data_from_overpass(*&tile, debug, download_method, cache_file.as_deref()) {
+        Ok(data) => Ok(vec![data]),
+        Err(error) => {
+            let lat_span = tile.max().lat() - tile.min().lat();
+            let lng_span = tile.max().lng() - tile.min().lng();
+            let max_span = lat_span.max(lng_span);
+            if max_span <= min_tile_degrees {
+                return Err(error);
+            }
+
+            let next_degrees = (current_tile_degrees / 2.0).max(min_tile_degrees);
+            eprintln!(
+                "{}",
+                format!(
+                    "Warning: tile failed at {:.5} degrees, splitting to {:.5}: {error}",
+                    current_tile_degrees, next_degrees
+                )
+                .yellow()
+                .bold()
+            );
+
+            let children = split_bbox_for_tiled_fetch(tile, next_degrees)?;
+            let mut data = Vec::new();
+            for child in children {
+                let mut child_data = fetch_tile_adaptive(
+                    child,
+                    debug,
+                    download_method,
+                    tile_cache_dir,
+                    next_degrees,
+                    min_tile_degrees,
+                    tile_sequence,
+                )?;
+                data.append(&mut child_data);
+            }
+            Ok(data)
+        }
+    }
+}
+
+fn tile_cache_path(dir: &Path, tile: LLBBox, sequence: usize) -> std::path::PathBuf {
+    dir.join(format!(
+        "tile_{sequence:04}_{:.5}_{:.5}_{:.5}_{:.5}.json",
+        tile.min().lat(),
+        tile.min().lng(),
+        tile.max().lat(),
+        tile.max().lng()
+    ))
+}
+
+fn find_cached_tile(tile_cache_dir: Option<&Path>, tile: LLBBox) -> Option<std::path::PathBuf> {
+    let dir = tile_cache_dir?;
+    let suffix = format!(
+        "{:.5}_{:.5}_{:.5}_{:.5}.json",
+        tile.min().lat(),
+        tile.min().lng(),
+        tile.max().lat(),
+        tile.max().lng()
+    );
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.ends_with(&suffix) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Fetches a short area name using Nominatim for the given lat/lon
 pub fn fetch_area_name(lat: f64, lon: f64) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let client = Client::builder()
@@ -379,4 +569,93 @@ pub fn fetch_area_name(lat: f64, lon: f64) -> Result<Option<String>, Box<dyn std
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::osm_parser::OsmElement;
+
+    #[test]
+    fn tiled_fetch_split_bbox_covers_area_without_exceeding_bounds() {
+        let bbox = LLBBox::new(31.0, 121.0, 31.09, 121.11).unwrap();
+        let tiles = split_bbox_for_tiled_fetch(bbox, 0.04).unwrap();
+
+        assert_eq!(tiles.len(), 9);
+        assert_eq!(tiles.first().unwrap().min().lat(), bbox.min().lat());
+        assert_eq!(tiles.first().unwrap().min().lng(), bbox.min().lng());
+        assert_eq!(tiles.last().unwrap().max().lat(), bbox.max().lat());
+        assert_eq!(tiles.last().unwrap().max().lng(), bbox.max().lng());
+        assert!(tiles.iter().all(|tile| tile.min().lat() >= bbox.min().lat()
+            && tile.max().lat() <= bbox.max().lat()
+            && tile.min().lng() >= bbox.min().lng()
+            && tile.max().lng() <= bbox.max().lng()));
+    }
+
+    #[test]
+    fn tiled_fetch_merge_osm_data_deduplicates_by_type_and_id() {
+        let first = OsmData {
+            remark: None,
+            elements: vec![
+                OsmElement {
+                    r#type: "node".to_string(),
+                    id: 1,
+                    lat: Some(31.0),
+                    lon: Some(121.0),
+                    nodes: None,
+                    tags: None,
+                    members: Vec::new(),
+                },
+                OsmElement {
+                    r#type: "way".to_string(),
+                    id: 10,
+                    lat: None,
+                    lon: None,
+                    nodes: Some(vec![1]),
+                    tags: None,
+                    members: Vec::new(),
+                },
+            ],
+        };
+        let second = OsmData {
+            remark: None,
+            elements: vec![
+                OsmElement {
+                    r#type: "node".to_string(),
+                    id: 1,
+                    lat: Some(31.0),
+                    lon: Some(121.0),
+                    nodes: None,
+                    tags: None,
+                    members: Vec::new(),
+                },
+                OsmElement {
+                    r#type: "way".to_string(),
+                    id: 11,
+                    lat: None,
+                    lon: None,
+                    nodes: Some(vec![1]),
+                    tags: None,
+                    members: Vec::new(),
+                },
+            ],
+        };
+
+        let merged = merge_tiled_osm_data(vec![first, second]);
+        assert_eq!(merged.elements.len(), 3);
+        let node_count = merged
+            .elements
+            .iter()
+            .filter(|e| e.r#type == "node" && e.id == 1)
+            .count();
+        assert_eq!(node_count, 1);
+        assert!(merged
+            .elements
+            .iter()
+            .any(|e| e.r#type == "way" && e.id == 10));
+        assert!(merged
+            .elements
+            .iter()
+            .any(|e| e.r#type == "way" && e.id == 11));
+    }
 }

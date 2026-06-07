@@ -7,6 +7,8 @@ use crate::scene_writer::tres_writer::MaterialType;
 use crate::scene_writer::SceneWriter;
 use std::collections::HashMap;
 
+const MAX_FACADE_DETAIL_FLOORS: u32 = 160;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildingCategory {
     Residential,
@@ -639,7 +641,7 @@ pub fn make_building_detail_meshes(
         };
     }
 
-    let floor_count = (height / 3.0).floor().max(1.0) as u32;
+    let floor_count = ((height / 3.0).floor().max(1.0) as u32).min(MAX_FACADE_DETAIL_FLOORS);
     let signed = signed_area(polygon);
     let mut longest_edge: Option<((f32, f32), (f32, f32), f32)> = None;
 
@@ -1154,6 +1156,33 @@ mod tests {
         assert!(details.door.vertex_count() >= 4);
         assert!(details.trim.vertex_count() >= 32);
         assert!(details.rooftop.vertex_count() >= 24);
+    }
+
+    #[test]
+    fn facade_details_cap_absurd_height_vertex_growth() {
+        let footprint = vec![
+            (-8.0, -5.0),
+            (8.0, -5.0),
+            (8.0, 5.0),
+            (-8.0, 5.0),
+            (-8.0, -5.0),
+        ];
+        let style = classify_building_style(
+            &tags(&[("building", "yes"), ("building:levels", "1235678911121415")]),
+            700.0,
+            1371593537,
+        );
+
+        let details = make_building_detail_meshes(&footprint, 1_000_000.0, "flat", &style);
+
+        assert!(
+            details.windows.vertex_count() < 50_000,
+            "absurd height should not produce unbounded window mesh"
+        );
+        assert!(
+            details.trim.vertex_count() < 80_000,
+            "absurd height should not produce unbounded trim mesh"
+        );
     }
 
     #[test]

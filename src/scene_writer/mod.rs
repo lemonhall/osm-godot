@@ -23,7 +23,7 @@ use crate::coordinate_system::cartesian::XZBBox;
 use crate::ground::Ground;
 use chunk_grid::{ChunkGrid, ElementMetadata, SceneElement};
 use geometry::MeshData;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tres_writer::MaterialType;
@@ -35,6 +35,7 @@ pub struct SceneWriter {
     pub ground: Arc<Ground>,
     pub output_dir: PathBuf,
     pub godot_scale: f32,
+    pub stream_radius: i32,
     material_ids: HashMap<MaterialType, u32>,
 }
 
@@ -61,6 +62,7 @@ impl SceneWriter {
             ground,
             output_dir,
             godot_scale,
+            stream_radius: 2,
             material_ids,
         }
     }
@@ -157,6 +159,7 @@ impl SceneWriter {
         self.write_cloud_texture_asset(&assets_dir)?;
         self.write_fps_player_script(&scripts_dir)?;
         self.write_chunk_mesh_loader_script(&scripts_dir)?;
+        self.write_world_streamer_script(&scripts_dir)?;
 
         // Write each chunk scene
         let mut non_empty_count = 0u64;
@@ -168,15 +171,10 @@ impl SceneWriter {
             tscn_writer::write_chunk_scene(chunk, &scenes_dir, &mesh_data_dir, &self.material_ids)?;
             non_empty_count += 1;
         }
-        tscn_writer::write_roads_scene(
-            self.chunk_grid.chunks.values(),
-            &scenes_dir,
-            &mesh_data_dir,
-            self.godot_scale,
-        )?;
-
         // Write master scene
         self.write_master_scene(&scenes_dir)?;
+        self.write_world_manifest()?;
+        self.write_navigation_index()?;
 
         // Write project files
         project_writer::write_project_file(&self.output_dir, "OSM Godot World")?;
@@ -207,15 +205,9 @@ impl SceneWriter {
         let path = scenes_dir.join("master.tscn");
         let mut f = std::fs::File::create(&path)?;
 
-        let non_empty: Vec<_> = self
-            .chunk_grid
-            .all_coords()
-            .into_iter()
-            .filter(|c| !self.chunk_grid.chunks[c].elements.is_empty())
-            .collect();
-
-        // load_steps = chunk PackedScenes + script/texture resources + scene subresources.
-        let load_steps = non_empty.len() as u32 + 10;
+        // load_steps = scripts/textures + scene subresources. Chunks are loaded at runtime
+        // from world_manifest.json by world_streamer.gd.
+        let load_steps = 12;
         writeln!(
             f,
             "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]"
@@ -223,16 +215,8 @@ impl SceneWriter {
         writeln!(f)?;
 
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
+        writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/world_streamer.gd\" id=\"streamer_script\"]")?;
         writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]")?;
-        writeln!(f, "[ext_resource type=\"PackedScene\" path=\"res://scenes/roads.tscn\" id=\"roads_scene\"]")?;
-
-        // Ext resources: each chunk PackedScene
-        let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
-        for (i, coord) in non_empty.iter().enumerate() {
-            let eid = (i + 1) as u32;
-            writeln!(f, "[ext_resource type=\"PackedScene\" path=\"res://scenes/Chunk_{}_{}.tscn\" id=\"{eid}\"]", coord.0, coord.1)?;
-            chunk_eids.insert(*coord, eid);
-        }
         writeln!(f)?;
 
         let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32
@@ -400,37 +384,151 @@ impl SceneWriter {
 
         writeln!(
             f,
-            "[node name=\"Roads\" parent=\".\" instance=ExtResource(\"roads_scene\")]"
+            "[node name=\"WorldStreamer\" type=\"Node3D\" parent=\".\"]"
         )?;
+        writeln!(f, "script = ExtResource(\"streamer_script\")")?;
+        writeln!(f, "manifest_path = \"res://world_manifest.json\"")?;
+        writeln!(f, "player_path = NodePath(\"../Player\")")?;
+        writeln!(f, "stream_radius = {}", self.stream_radius.max(0))?;
+        writeln!(f, "unload_radius = {}", self.stream_radius.max(0) + 1)?;
         writeln!(f)?;
-
-        // Chunk instances
-        let chunks_group = "Chunks";
-        writeln!(
-            f,
-            "[node name=\"{chunks_group}\" type=\"Node3D\" parent=\".\"]"
-        )?;
-        writeln!(f)?;
-
-        for coord in &non_empty {
-            let eid = chunk_eids[coord];
-            let cname = format!("Chunk_{}_{}", coord.0, coord.1);
-            let chunk = &self.chunk_grid.chunks[coord];
-            let (min_x, min_z, _, _) = chunk.world_bounds;
-            let gx = min_x as f32 * self.godot_scale;
-            let gz = -(min_z as f32) * self.godot_scale;
-            writeln!(
-                f,
-                "[node name=\"{cname}\" parent=\"{chunks_group}\" instance=ExtResource(\"{eid}\")]"
-            )?;
-            writeln!(
-                f,
-                "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {gx}, 0, {gz})"
-            )?;
-            writeln!(f)?;
-        }
 
         Ok(())
+    }
+
+    fn write_world_manifest(&self) -> std::io::Result<()> {
+        let mut coords = self.chunk_grid.all_coords();
+        coords.sort_by_key(|coord| (coord.0, coord.1));
+
+        let chunks: Vec<_> = coords
+            .into_iter()
+            .filter_map(|coord| {
+                let chunk = &self.chunk_grid.chunks[&coord];
+                if chunk.elements.is_empty() {
+                    return None;
+                }
+                let (min_x, min_z, max_x, max_z) = chunk.world_bounds;
+                let origin_x = min_x as f32 * self.godot_scale;
+                let origin_z = -(min_z as f32) * self.godot_scale;
+                let bounds = self.chunk_grid.chunk_bounds_godot(coord, self.godot_scale);
+                let road_count = chunk
+                    .elements
+                    .iter()
+                    .filter(|element| match element {
+                        SceneElement::Mesh { material_type, .. } => {
+                            matches!(
+                                material_type,
+                                MaterialType::RoadAsphalt | MaterialType::RoadSidewalk
+                            )
+                        }
+                        SceneElement::Instance { .. } => false,
+                    })
+                    .count();
+                Some(serde_json::json!({
+                    "coord": [coord.0, coord.1],
+                    "world_bounds_blocks": [min_x, min_z, max_x, max_z],
+                    "bounds_godot": [bounds.0, bounds.1, bounds.2, bounds.3],
+                    "origin": [origin_x, origin_z],
+                    "scene_path": format!("res://scenes/Chunk_{}_{}.tscn", coord.0, coord.1),
+                    "mesh_data_path": format!("res://mesh_data/Chunk_{}_{}.json", coord.0, coord.1),
+                    "element_count": chunk.elements.len(),
+                    "road_count": road_count,
+                }))
+            })
+            .collect();
+
+        let payload = serde_json::json!({
+            "version": 1,
+            "chunk_size_blocks": self.chunk_grid.chunk_size,
+            "godot_scale": self.godot_scale,
+            "stream_radius": self.stream_radius.max(0),
+            "chunks": chunks,
+        });
+        std::fs::write(
+            self.output_dir.join("world_manifest.json"),
+            serde_json::to_string(&payload)?,
+        )
+    }
+
+    fn write_navigation_index(&self) -> std::io::Result<()> {
+        let mut coords = self.chunk_grid.all_coords();
+        coords.sort_by_key(|coord| (coord.0, coord.1));
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let mut entries = Vec::new();
+
+        for coord in coords {
+            let chunk = &self.chunk_grid.chunks[&coord];
+            let chunk_x = chunk.world_bounds.0 as f32 * self.godot_scale;
+            let chunk_z = -(chunk.world_bounds.1 as f32) * self.godot_scale;
+
+            for element in &chunk.elements {
+                let SceneElement::Mesh {
+                    mesh_data,
+                    transform,
+                    metadata,
+                    ..
+                } = element
+                else {
+                    continue;
+                };
+                let Some(osm_kind) = metadata.get("osm_kind") else {
+                    continue;
+                };
+                if osm_kind != "road" && osm_kind != "building" {
+                    continue;
+                }
+                let Some(osm_id) = metadata.get("osm_id") else {
+                    continue;
+                };
+                if !seen.insert((osm_kind.clone(), osm_id.clone())) {
+                    continue;
+                }
+
+                let (min_x, min_z, max_x, max_z) =
+                    mesh_bounds_godot(mesh_data, chunk_x, chunk_z, transform);
+                let center_x = (min_x + max_x) * 0.5;
+                let center_z = (min_z + max_z) * 0.5;
+                let mut entry = serde_json::Map::new();
+                entry.insert("osm_id".to_string(), serde_json::json!(osm_id));
+                entry.insert("osm_kind".to_string(), serde_json::json!(osm_kind));
+                entry.insert("chunk".to_string(), serde_json::json!([coord.0, coord.1]));
+                entry.insert(
+                    "center".to_string(),
+                    serde_json::json!([center_x, center_z]),
+                );
+                entry.insert(
+                    "bbox".to_string(),
+                    serde_json::json!([min_x, min_z, max_x, max_z]),
+                );
+                for key in [
+                    "name",
+                    "official_name",
+                    "alt_name",
+                    "building",
+                    "highway",
+                    "amenity",
+                    "shop",
+                    "tourism",
+                    "addr:city",
+                    "addr:street",
+                    "addr:housenumber",
+                ] {
+                    if let Some(value) = metadata.get(key) {
+                        entry.insert(key.to_string(), serde_json::json!(value));
+                    }
+                }
+                entries.push(serde_json::Value::Object(entry));
+            }
+        }
+
+        let payload = serde_json::json!({
+            "version": 1,
+            "entries": entries,
+        });
+        std::fs::write(
+            self.output_dir.join("navigation_index.json"),
+            serde_json::to_string(&payload)?,
+        )
     }
 
     fn player_spawn_godot(&self, world_cx: f32, world_cz: f32, span: f32) -> (f32, f32, f32) {
@@ -666,7 +764,10 @@ impl SceneWriter {
             "\t\tpush_error(\"Failed to open mesh data: \" + mesh_data_path)"
         )?;
         writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar parsed = JSON.parse_string(file.get_as_text())")?;
+        writeln!(
+            f,
+            "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())"
+        )?;
         writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
         writeln!(
             f,
@@ -842,6 +943,175 @@ impl SceneWriter {
         Ok(())
     }
 
+    fn write_world_streamer_script(&self, scripts_dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = scripts_dir.join("world_streamer.gd");
+        let mut f = std::fs::File::create(&path)?;
+
+        writeln!(f, "extends Node3D")?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "@export var manifest_path := \"res://world_manifest.json\""
+        )?;
+        writeln!(
+            f,
+            "@export var player_path: NodePath = NodePath(\"../Player\")"
+        )?;
+        writeln!(
+            f,
+            "@export var stream_radius := {}",
+            self.stream_radius.max(0)
+        )?;
+        writeln!(
+            f,
+            "@export var unload_radius := {}",
+            self.stream_radius.max(0) + 1
+        )?;
+        writeln!(f)?;
+        writeln!(f, "var manifest := {{}}")?;
+        writeln!(f, "var chunk_entries := {{}}")?;
+        writeln!(f, "var loaded_chunks := {{}}")?;
+        writeln!(f, "var player: Node3D = null")?;
+        writeln!(f)?;
+        writeln!(f, "func _ready() -> void:")?;
+        writeln!(f, "\t_load_manifest()")?;
+        writeln!(f, "\tplayer = get_node_or_null(player_path) as Node3D")?;
+        writeln!(f, "\t_refresh_streaming()")?;
+        writeln!(f)?;
+        writeln!(f, "func _physics_process(_delta: float) -> void:")?;
+        writeln!(f, "\t_refresh_streaming()")?;
+        writeln!(f)?;
+        writeln!(f, "func _load_manifest() -> void:")?;
+        writeln!(
+            f,
+            "\tvar file := FileAccess.open(manifest_path, FileAccess.READ)"
+        )?;
+        writeln!(f, "\tif file == null:")?;
+        writeln!(
+            f,
+            "\t\tpush_error(\"Failed to open world manifest: \" + manifest_path)"
+        )?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar parsed = JSON.parse_string(file.get_as_text())")?;
+        writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
+        writeln!(
+            f,
+            "\t\tpush_error(\"Invalid world manifest: \" + manifest_path)"
+        )?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tmanifest = parsed")?;
+        writeln!(f, "\tchunk_entries.clear()")?;
+        writeln!(f, "\tfor entry in manifest.get(\"chunks\", []):")?;
+        writeln!(f, "\t\tvar coord: Array = entry.get(\"coord\", [])")?;
+        writeln!(f, "\t\tif coord.size() < 2:")?;
+        writeln!(f, "\t\t\tcontinue")?;
+        writeln!(
+            f,
+            "\t\tchunk_entries[_chunk_key(int(coord[0]), int(coord[1]))] = entry"
+        )?;
+        writeln!(f)?;
+        writeln!(f, "func _refresh_streaming() -> void:")?;
+        writeln!(f, "\tif player == null:")?;
+        writeln!(f, "\t\tplayer = get_node_or_null(player_path) as Node3D")?;
+        writeln!(f, "\tif player == null or chunk_entries.is_empty():")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(
+            f,
+            "\tvar current: Array = _find_player_chunk(player.global_position)"
+        )?;
+        writeln!(f, "\tif current.size() < 2:")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar keep: Dictionary = {{}}")?;
+        writeln!(f, "\tfor dx in range(-stream_radius, stream_radius + 1):")?;
+        writeln!(f, "\t\tfor dz in range(-stream_radius, stream_radius + 1):")?;
+        writeln!(f, "\t\t\tvar cx := int(current[0]) + dx")?;
+        writeln!(f, "\t\t\tvar cz := int(current[1]) + dz")?;
+        writeln!(f, "\t\t\tvar key := _chunk_key(cx, cz)")?;
+        writeln!(f, "\t\t\tif chunk_entries.has(key):")?;
+        writeln!(f, "\t\t\t\tkeep[key] = true")?;
+        writeln!(f, "\t\t\t\t_load_chunk(key)")?;
+        writeln!(f, "\t_unload_far_chunks(current, keep)")?;
+        writeln!(f)?;
+        writeln!(f, "func _load_chunk(key: String) -> void:")?;
+        writeln!(f, "\tif loaded_chunks.has(key):")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar entry: Dictionary = chunk_entries[key]")?;
+        writeln!(
+            f,
+            "\tvar packed := load(str(entry.get(\"scene_path\", \"\"))) as PackedScene"
+        )?;
+        writeln!(f, "\tif packed == null:")?;
+        writeln!(f, "\t\tpush_error(\"Failed to load chunk scene: \" + str(entry.get(\"scene_path\", \"\")))")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tvar instance := packed.instantiate() as Node3D")?;
+        writeln!(f, "\tvar origin: Array = entry.get(\"origin\", [0.0, 0.0])")?;
+        writeln!(
+            f,
+            "\tinstance.position = Vector3(float(origin[0]), 0.0, float(origin[1]))"
+        )?;
+        writeln!(f, "\tinstance.set_meta(\"chunk_key\", key)")?;
+        writeln!(f, "\tinstance.set_meta(\"streamed_chunk\", true)")?;
+        writeln!(f, "\tadd_child(instance)")?;
+        writeln!(f, "\tloaded_chunks[key] = instance")?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "func _unload_far_chunks(current: Array, keep: Dictionary) -> void:"
+        )?;
+        writeln!(f, "\tfor key in loaded_chunks.keys():")?;
+        writeln!(f, "\t\tif keep.has(key):")?;
+        writeln!(f, "\t\t\tcontinue")?;
+        writeln!(f, "\t\tvar coord: Array = _parse_chunk_key(key)")?;
+        writeln!(f, "\t\tif coord.size() < 2:")?;
+        writeln!(f, "\t\t\tcontinue")?;
+        writeln!(f, "\t\tvar dist: int = max(abs(int(coord[0]) - int(current[0])), abs(int(coord[1]) - int(current[1])))")?;
+        writeln!(f, "\t\tif dist > unload_radius:")?;
+        writeln!(f, "\t\t\tvar node: Node = loaded_chunks[key]")?;
+        writeln!(f, "\t\t\tloaded_chunks.erase(key)")?;
+        writeln!(f, "\t\t\tnode.queue_free()")?;
+        writeln!(f)?;
+        writeln!(f, "func _find_player_chunk(pos: Vector3) -> Array:")?;
+        writeln!(f, "\tvar best: Array = []")?;
+        writeln!(f, "\tvar best_d2: float = INF")?;
+        writeln!(f, "\tfor key in chunk_entries.keys():")?;
+        writeln!(f, "\t\tvar entry: Dictionary = chunk_entries[key]")?;
+        writeln!(f, "\t\tvar bounds: Array = entry.get(\"bounds_godot\", [])")?;
+        writeln!(f, "\t\tif bounds.size() < 4:")?;
+        writeln!(f, "\t\t\tcontinue")?;
+        writeln!(f, "\t\tvar min_x := float(bounds[0])")?;
+        writeln!(f, "\t\tvar min_z := float(bounds[1])")?;
+        writeln!(f, "\t\tvar max_x := float(bounds[2])")?;
+        writeln!(f, "\t\tvar max_z := float(bounds[3])")?;
+        writeln!(
+            f,
+            "\t\tif pos.x >= min_x and pos.x <= max_x and pos.z >= min_z and pos.z <= max_z:"
+        )?;
+        writeln!(f, "\t\t\treturn entry.get(\"coord\", [])")?;
+        writeln!(f, "\t\tvar cx: float = clamp(pos.x, min_x, max_x)")?;
+        writeln!(f, "\t\tvar cz: float = clamp(pos.z, min_z, max_z)")?;
+        writeln!(
+            f,
+            "\t\tvar d2: float = Vector2(pos.x - cx, pos.z - cz).length_squared()"
+        )?;
+        writeln!(f, "\t\tif d2 < best_d2:")?;
+        writeln!(f, "\t\t\tbest_d2 = d2")?;
+        writeln!(f, "\t\t\tbest = entry.get(\"coord\", [])")?;
+        writeln!(f, "\treturn best")?;
+        writeln!(f)?;
+        writeln!(f, "func _chunk_key(cx: int, cz: int) -> String:")?;
+        writeln!(f, "\treturn str(cx) + \":\" + str(cz)")?;
+        writeln!(f)?;
+        writeln!(f, "func _parse_chunk_key(key: String) -> Array:")?;
+        writeln!(f, "\tvar parts := key.split(\":\")")?;
+        writeln!(f, "\tif parts.size() < 2:")?;
+        writeln!(f, "\t\treturn []")?;
+        writeln!(f, "\treturn [int(parts[0]), int(parts[1])]")?;
+
+        Ok(())
+    }
+
     /// Number of chunks.
     pub fn chunk_count(&self) -> usize {
         self.chunk_grid.chunk_count()
@@ -879,6 +1149,33 @@ fn draw_cloud_ellipse(
             }
         }
     }
+}
+
+fn mesh_bounds_godot(
+    mesh_data: &MeshData,
+    chunk_x: f32,
+    chunk_z: f32,
+    transform: &[f32; 12],
+) -> (f32, f32, f32, f32) {
+    if mesh_data.vertices.len() < 3 {
+        let x = chunk_x + transform[9];
+        let z = chunk_z + transform[11];
+        return (x, z, x, z);
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_z = f32::INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for vertex in mesh_data.vertices.chunks_exact(3) {
+        let x = chunk_x + transform[9] + vertex[0];
+        let z = chunk_z + transform[11] + vertex[2];
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_z = min_z.min(z);
+        max_z = max_z.max(z);
+    }
+    (min_x, min_z, max_x, max_z)
 }
 
 fn blend_pixel(dst: &mut image::Rgba<u8>, src: [u8; 4]) {
@@ -950,12 +1247,12 @@ mod tests {
         let master =
             std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"));
-        assert!(master.contains("[node name=\"Chunks\" type=\"Node3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"WorldStreamer\" type=\"Node3D\" parent=\".\"]"));
         assert!(!master.contains("parent=\"World\""));
     }
 
     #[test]
-    fn master_scene_instances_chunk_scenes_on_node_declaration() {
+    fn master_scene_writes_chunk_scenes_without_static_instances() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let ground = Arc::new(Ground::new_flat(0));
@@ -972,12 +1269,15 @@ mod tests {
 
         let master =
             std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(master.contains("[node name=\"Chunk_0_0\" parent=\"Chunks\" instance=ExtResource("));
+        assert!(tmp.path().join("scenes").join("Chunk_0_0.tscn").exists());
+        assert!(tmp.path().join("mesh_data").join("Chunk_0_0.json").exists());
+        assert!(!master.contains("res://scenes/Chunk_0_0.tscn"));
+        assert!(!master.contains("[node name=\"Chunk_0_0\""));
         assert!(!master.contains("\ninstance = ExtResource("));
     }
 
     #[test]
-    fn master_scene_loads_independent_roads_scene() {
+    fn master_scene_streams_roads_through_chunk_data() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let ground = Arc::new(Ground::new_flat(0));
@@ -994,11 +1294,13 @@ mod tests {
 
         let master =
             std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(tmp.path().join("scenes").join("roads.tscn").exists());
-        assert!(tmp.path().join("mesh_data").join("roads.json").exists());
-        assert!(master.contains("[ext_resource type=\"PackedScene\" path=\"res://scenes/roads.tscn\" id=\"roads_scene\"]"));
-        assert!(master
-            .contains("[node name=\"Roads\" parent=\".\" instance=ExtResource(\"roads_scene\")]"));
+        let chunk_data =
+            std::fs::read_to_string(tmp.path().join("mesh_data").join("Chunk_0_0.json")).unwrap();
+        assert!(!tmp.path().join("mesh_data").join("roads.json").exists());
+        assert!(!master.contains("res://scenes/roads.tscn"));
+        assert!(!master.contains("[node name=\"Roads\""));
+        assert!(chunk_data.contains("\"material\":\"road_asphalt\""));
+        assert!(chunk_data.contains("\"name\":\"Highway_1\""));
     }
 
     #[test]
@@ -1232,5 +1534,127 @@ mod tests {
         assert!(!script.contains("material_name.begins_with(\"road_\")"));
         assert!(!script.contains("material_name == \"railway_gravel\""));
         assert!(!script.contains("material_name == \"building_wall\""));
+    }
+
+    #[test]
+    fn world_streaming_manifest_and_master_do_not_static_load_chunks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(1400.0, 1400.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        for i in 0..24 {
+            let x = 20 + (i % 6) * 160;
+            let z = 20 + (i / 6) * 160;
+            scene.add_mesh(
+                format!("BuildingWall_{i}"),
+                unit_mesh(),
+                MaterialType::BuildingWall,
+                x,
+                z,
+            );
+        }
+
+        scene.save_all().unwrap();
+
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(!master.contains("res://scenes/Chunk_"));
+        assert!(!master.contains("parent=\"Chunks\" instance=ExtResource"));
+        assert!(master.contains("world_streamer.gd"));
+
+        let manifest_path = tmp.path().join("world_manifest.json");
+        assert!(manifest_path.exists());
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        let chunks = manifest["chunks"].as_array().unwrap();
+        assert!(
+            chunks.len() >= 12,
+            "expected many manifest chunks, got {chunks:?}"
+        );
+        assert!(chunks[0]["coord"].is_array());
+        assert!(chunks[0]["scene_path"]
+            .as_str()
+            .unwrap()
+            .starts_with("res://scenes/"));
+        assert!(chunks[0]["mesh_data_path"]
+            .as_str()
+            .unwrap()
+            .starts_with("res://mesh_data/"));
+    }
+
+    #[test]
+    fn world_streaming_script_has_radius_load_and_unload_logic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("world_streamer.gd")).unwrap();
+        assert!(script.contains("@export var stream_radius"));
+        assert!(script.contains("@export var unload_radius"));
+        assert!(script.contains("func _load_chunk"));
+        assert!(script.contains("func _unload_far_chunks"));
+        assert!(script.contains("world_manifest.json"));
+        assert!(script.contains("loaded_chunks"));
+    }
+
+    #[test]
+    fn world_streaming_navigation_index_contains_buildings_and_roads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.add_mesh_with_metadata(
+            "BuildingWall_100".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            20,
+            20,
+            [
+                ("osm_id".to_string(), "100".to_string()),
+                ("osm_kind".to_string(), "building".to_string()),
+                ("name".to_string(), "Streaming Test Building".to_string()),
+                ("building".to_string(), "office".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        scene.add_mesh_with_metadata(
+            "Highway_200".to_string(),
+            unit_mesh(),
+            MaterialType::RoadAsphalt,
+            40,
+            40,
+            [
+                ("osm_id".to_string(), "200".to_string()),
+                ("osm_kind".to_string(), "road".to_string()),
+                ("name".to_string(), "Streaming Test Road".to_string()),
+                ("highway".to_string(), "primary".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        scene.save_all().unwrap();
+
+        let index_path = tmp.path().join("navigation_index.json");
+        assert!(index_path.exists());
+        let index: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(index_path).unwrap()).unwrap();
+        let entries = index["entries"].as_array().unwrap();
+        assert!(entries.iter().any(|e| e["osm_kind"] == "building"
+            && e["name"] == "Streaming Test Building"
+            && e["chunk"].is_array()
+            && e["center"].is_array()
+            && e["bbox"].is_array()));
+        assert!(entries.iter().any(|e| e["osm_kind"] == "road"
+            && e["name"] == "Streaming Test Road"
+            && e["highway"] == "primary"
+            && e["chunk"].is_array()));
     }
 }

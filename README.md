@@ -63,24 +63,45 @@ godot --path "./my_world"
 $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "34.210594,108.947432,34.226406,108.969568" --output-dir E:\tmp\osm-godot-xian-yanta-style --chunk-size 128
 ```
 
-### 上海外滩示例
+### 上海外滩 streaming 示例
 
-这份外滩/陆家嘴区域工程使用 Arnis-style 建筑语法生成，已经用 Godot 4.6 headless 端到端跑过资源导入、独立道路场景加载、OSM 元数据注入、玩家移动、鼠标视角和 noclip 验证。
+这份外滩/陆家嘴区域工程使用 Arnis-style 建筑语法生成，已经用 Godot 4.6 headless 端到端跑过资源导入、运行时 chunk streaming、道路 metadata、OSM 元数据注入、玩家移动和局部加载验证。
 
 ```powershell
-$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v4-arnis-buildings --chunk-size 128
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v6-streaming --chunk-size 128 --stream-radius 2
 ```
 
 生成结果：
 
-- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v4-arnis-buildings\project.godot`
+- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v6-streaming\project.godot`
 - 范围：`31.2290,121.4820,31.2455,121.5100`
 - 建筑：`1105`
 - 道路：`1615`
 - 树木：`56`
 - 水域：`28`
 - 场景元素：`6981`
-- 非空区块：`315`
+- 非空区块：`269`
+
+### 整个上海 streaming 示例
+
+整上海范围必须使用分片 Overpass 抓取和本地 tile cache。小 chunk 会产生过多文件；本机已验证通过的推荐组合是 `--chunk-size 512 --stream-radius 1`。它仍然生成完整上海 world package，但 Godot 运行时初始只加载玩家附近最多 `3x3` 个 chunk。
+
+```powershell
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --release --target-dir E:\tmp\osm-godot-target-release -- --bbox "30.67,120.85,31.88,122.12" --output-dir E:\tmp\osm-godot-shanghai-city-v2-streaming-c512 --chunk-size 512 --stream-radius 1 --tiled-fetch --fetch-tile-degrees 0.25 --tile-cache-dir E:\tmp\osm-godot-cache\shanghai
+```
+
+生成结果：
+
+- 输出工程：`E:\tmp\osm-godot-shanghai-city-v2-streaming-c512\project.godot`
+- 范围：`30.67,120.85,31.88,122.12`
+- 建筑：`192390`
+- 道路：`253754`
+- 树木：`4315`
+- 水域：`6332`
+- 场景元素：`1286786`
+- 非空区块：`33879`
+- 导航索引：`445340` 条道路/建筑记录
+- E2E：启动时 `loaded_initial=9`，移动到远处后 chunk 集合变化，且道路 OSM metadata 可读。
 
 ### Arnis-style 建筑语法
 
@@ -110,7 +131,11 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 | `--land-cover` | 启用 ESA 地表分类 | 开启 |
 | `--scale` | arnis block/meter 比例 | 1.0 |
 | `--godot-scale` | Godot 单位/arnis block（1 block = 0.5m） | 0.5 |
-| `--chunk-size` | 区块大小（Godot 单位） | 128 |
+| `--chunk-size` | 区块大小（arnis block 单位） | 128 |
+| `--stream-radius` | 运行时加载 player 周围的 chunk 半径 | 2 |
+| `--tiled-fetch` | 启用大 bbox 分片 Overpass 抓取 | 关闭 |
+| `--fetch-tile-degrees` | 分片抓取的经纬度 tile 大小 | 0.05 |
+| `--tile-cache-dir` | 分片 OSM JSON 缓存目录 | 无 |
 | `--debug` | 调试模式 | 关闭 |
 | `--file` | 使用本地 OSM JSON 文件（代替 API 获取） | — |
 
@@ -121,6 +146,8 @@ output/
 ├── project.godot              # Godot 4.6 项目文件
 ├── default_environment.tres   # 默认环境
 ├── metadata.json              # 地理参考元数据
+├── world_manifest.json        # streaming chunk manifest
+├── navigation_index.json      # 道路/建筑轻量导航索引
 ├── assets/                    # 生成资源，例如 cloud_billboard.png
 ├── materials/                 # toon-ish 材质资源
 │   ├── building_wall.tres
@@ -130,15 +157,14 @@ output/
 │   ├── water.tres
 │   └── ...
 ├── mesh_data/                 # 每个区块的 ArrayMesh JSON 数据
-│   ├── roads.json             # 全图道路 mesh，独立于区块加载
 │   ├── Chunk_0_0.json
 │   └── ...
 ├── scripts/                   # Godot 运行时脚本
 │   ├── chunk_mesh_loader.gd
+│   ├── world_streamer.gd
 │   └── fps_player.gd
 └── scenes/                    # 场景文件
-    ├── master.tscn            # 主场景（天空、太阳、云、玩家、道路、所有区块）
-    ├── roads.tscn             # 独立道路场景，由 master.tscn 直接加载
+    ├── master.tscn            # 主场景（天空、太阳、云、玩家、WorldStreamer）
     ├── Chunk_0_0.tscn         # 轻量区块 loader 场景
     ├── Chunk_0_1.tscn
     └── ...

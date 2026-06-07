@@ -19,7 +19,11 @@ pub struct Args {
     pub save_json_file: Option<String>,
 
     /// Output directory for the Godot project
-    #[arg(long = "output-dir", alias = "path", default_value = "./osm_godot_output")]
+    #[arg(
+        long = "output-dir",
+        alias = "path",
+        default_value = "./osm_godot_output"
+    )]
     pub path: PathBuf,
 
     /// World scale: arnis blocks per meter. 1.0 = 1 block/m, 2.0 = 2 blocks/m (more detail)
@@ -53,4 +57,20 @@ pub struct Args {
     /// Downloader method (requests/curl/wget)
     #[arg(long, default_value = "requests")]
     pub downloader: String,
+
+    /// Runtime streaming chunk radius around the player.
+    #[arg(long, default_value_t = 2)]
+    pub stream_radius: i32,
+
+    /// Fetch large OSM bboxes as multiple Overpass tile requests.
+    #[arg(long)]
+    pub tiled_fetch: bool,
+
+    /// Tile size in degrees for --tiled-fetch.
+    #[arg(long, default_value_t = 0.04)]
+    pub fetch_tile_degrees: f64,
+
+    /// Directory for idempotent OSM tile cache used by --tiled-fetch.
+    #[arg(long)]
+    pub tile_cache_dir: Option<PathBuf>,
 }

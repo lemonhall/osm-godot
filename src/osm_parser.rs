@@ -4,7 +4,7 @@ use crate::coordinate_system::geographic::{LLBBox, LLPoint};
 use crate::coordinate_system::transformation::CoordTransformer;
 use crate::progress::emit_gui_progress_update;
 use colored::Colorize;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -65,28 +65,28 @@ fn filter_tags(mut tags: HashMap<String, String>) -> HashMap<String, String> {
 
 // Raw data from OSM
 
-#[derive(Debug, Deserialize)]
-struct OsmMember {
-    r#type: String,
-    r#ref: u64,
-    r#role: String,
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct OsmMember {
+    pub(crate) r#type: String,
+    pub(crate) r#ref: u64,
+    pub(crate) r#role: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct OsmElement {
-    pub r#type: String,
-    pub id: u64,
-    pub lat: Option<f64>,
-    pub lon: Option<f64>,
-    pub nodes: Option<Vec<u64>>,
-    pub tags: Option<HashMap<String, String>>,
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct OsmElement {
+    pub(crate) r#type: String,
+    pub(crate) id: u64,
+    pub(crate) lat: Option<f64>,
+    pub(crate) lon: Option<f64>,
+    pub(crate) nodes: Option<Vec<u64>>,
+    pub(crate) tags: Option<HashMap<String, String>>,
     #[serde(default)]
-    pub members: Vec<OsmMember>,
+    pub(crate) members: Vec<OsmMember>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct OsmData {
-    elements: Vec<OsmElement>,
+    pub(crate) elements: Vec<OsmElement>,
     #[serde(default)]
     pub remark: Option<String>,
 }

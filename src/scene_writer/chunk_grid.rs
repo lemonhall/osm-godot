@@ -60,48 +60,25 @@ pub struct ChunkGrid {
 impl ChunkGrid {
     /// Create a new chunk grid covering the given world bbox.
     pub fn new(xzbbox: &XZBBox, chunk_size: i32) -> Self {
-        let mut chunks = HashMap::new();
-
-        let min_cx = xzbbox.min_x().div_euclid(chunk_size);
-        let max_cx = xzbbox.max_x().div_euclid(chunk_size);
-        let min_cz = xzbbox.min_z().div_euclid(chunk_size);
-        let max_cz = xzbbox.max_z().div_euclid(chunk_size);
-
-        for cx in min_cx..=max_cx {
-            for cz in min_cz..=max_cz {
-                let world_min_x = cx * chunk_size;
-                let world_min_z = cz * chunk_size;
-                let world_max_x = world_min_x + chunk_size - 1;
-                let world_max_z = world_min_z + chunk_size - 1;
-
-                chunks.insert(
-                    ChunkCoord(cx, cz),
-                    Chunk {
-                        coord: ChunkCoord(cx, cz),
-                        world_bounds: (world_min_x, world_min_z, world_max_x, world_max_z),
-                        elements: Vec::new(),
-                    },
-                );
-            }
-        }
-
         ChunkGrid {
             xzbbox: xzbbox.clone(),
             chunk_size,
-            chunks,
+            chunks: HashMap::new(),
         }
     }
 
     /// Determine which chunk a world coordinate belongs to.
     pub fn chunk_for(&self, x: i32, z: i32) -> Option<ChunkCoord> {
+        if x < self.xzbbox.min_x()
+            || x > self.xzbbox.max_x()
+            || z < self.xzbbox.min_z()
+            || z > self.xzbbox.max_z()
+        {
+            return None;
+        }
         let cx = x.div_euclid(self.chunk_size);
         let cz = z.div_euclid(self.chunk_size);
-        let coord = ChunkCoord(cx, cz);
-        if self.chunks.contains_key(&coord) {
-            Some(coord)
-        } else {
-            None
-        }
+        Some(ChunkCoord(cx, cz))
     }
 
     /// Returns bounding box center in Godot coords (meters).
@@ -132,6 +109,20 @@ impl ChunkGrid {
         self.chunks.len()
     }
 
+    fn ensure_chunk(&mut self, coord: ChunkCoord) -> &mut Chunk {
+        self.chunks.entry(coord).or_insert_with(|| {
+            let world_min_x = coord.0 * self.chunk_size;
+            let world_min_z = coord.1 * self.chunk_size;
+            let world_max_x = world_min_x + self.chunk_size - 1;
+            let world_max_z = world_min_z + self.chunk_size - 1;
+            Chunk {
+                coord,
+                world_bounds: (world_min_x, world_min_z, world_max_x, world_max_z),
+                elements: Vec::new(),
+            }
+        })
+    }
+
     /// Add a mesh element to the appropriate chunk.
     pub fn add_mesh_element(
         &mut self,
@@ -145,22 +136,20 @@ impl ChunkGrid {
         metadata: ElementMetadata,
     ) {
         if let Some(coord) = self.chunk_for(world_x, world_z) {
-            let (min_x, min_z, _, _) = self.chunks[&coord].world_bounds;
+            let (min_x, min_z, _, _) = self.ensure_chunk(coord).world_bounds;
             let gx = (world_x - min_x) as f32 * godot_scale;
             let gz = -((world_z - min_z) as f32) * godot_scale;
 
             let transform =
                 crate::scene_writer::tscn_writer::translation_transform(gx, ground_y, gz);
 
-            if let Some(chunk) = self.chunks.get_mut(&coord) {
-                chunk.elements.push(SceneElement::Mesh {
-                    name,
-                    mesh_data,
-                    material_type,
-                    transform,
-                    metadata,
-                });
-            }
+            self.ensure_chunk(coord).elements.push(SceneElement::Mesh {
+                name,
+                mesh_data,
+                material_type,
+                transform,
+                metadata,
+            });
         }
     }
 
@@ -177,31 +166,30 @@ impl ChunkGrid {
         y_rotation: f32,
     ) {
         if let Some(coord) = self.chunk_for(world_x, world_z) {
-            let (min_x, min_z, _, _) = self.chunks[&coord].world_bounds;
+            let (min_x, min_z, _, _) = self.ensure_chunk(coord).world_bounds;
             let gx = (world_x - min_x) as f32 * godot_scale;
             let gz = -((world_z - min_z) as f32) * godot_scale;
 
-            if let Some(chunk) = self.chunks.get_mut(&coord) {
-                // Check if we already have an Instance for this name/material combo
-                let existing = chunk.elements.iter_mut().find_map(|e| match e {
-                    SceneElement::Instance {
-                        name: n,
-                        material_type: mt,
-                        ..
-                    } if n == &name && mt == &material_type => Some(e),
-                    _ => None,
-                });
+            let chunk = self.ensure_chunk(coord);
+            // Check if we already have an Instance for this name/material combo
+            let existing = chunk.elements.iter_mut().find_map(|e| match e {
+                SceneElement::Instance {
+                    name: n,
+                    material_type: mt,
+                    ..
+                } if n == &name && mt == &material_type => Some(e),
+                _ => None,
+            });
 
-                if let Some(SceneElement::Instance { positions, .. }) = existing {
-                    positions.push(((gx, ground_y, gz), y_rotation));
-                } else {
-                    chunk.elements.push(SceneElement::Instance {
-                        name,
-                        mesh_data,
-                        material_type,
-                        positions: vec![((gx, ground_y, gz), y_rotation)],
-                    });
-                }
+            if let Some(SceneElement::Instance { positions, .. }) = existing {
+                positions.push(((gx, ground_y, gz), y_rotation));
+            } else {
+                chunk.elements.push(SceneElement::Instance {
+                    name,
+                    mesh_data,
+                    material_type,
+                    positions: vec![((gx, ground_y, gz), y_rotation)],
+                });
             }
         }
     }
@@ -242,5 +230,27 @@ mod tests {
         assert_eq!(transform[9], 22.0);
         assert_eq!(transform[10], 7.0);
         assert_eq!(transform[11], -22.0);
+    }
+
+    #[test]
+    fn large_bbox_grid_stays_sparse_until_elements_are_added() {
+        let bbox = XZBBox::rect_from_xz_lengths(120_000.0, 130_000.0).unwrap();
+        let mut grid = ChunkGrid::new(&bbox, 128);
+
+        assert_eq!(grid.chunk_count(), 0);
+
+        grid.add_mesh_element(
+            "SparseTest".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            42,
+            42,
+            0.5,
+            0.0,
+            ElementMetadata::new(),
+        );
+
+        assert_eq!(grid.chunk_count(), 1);
+        assert!(grid.chunks.contains_key(&ChunkCoord(0, 0)));
     }
 }
