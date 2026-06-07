@@ -148,6 +148,12 @@ impl SceneWriter {
             tscn_writer::write_chunk_scene(chunk, &scenes_dir, &mesh_data_dir, &self.material_ids)?;
             non_empty_count += 1;
         }
+        tscn_writer::write_roads_scene(
+            self.chunk_grid.chunks.values(),
+            &scenes_dir,
+            &mesh_data_dir,
+            self.godot_scale,
+        )?;
 
         // Write master scene
         self.write_master_scene(&scenes_dir)?;
@@ -157,7 +163,10 @@ impl SceneWriter {
         project_writer::write_default_environment(&self.output_dir)?;
         project_writer::write_metadata(
             &self.output_dir,
-            0.0, 0.0, 0.0, 0.0, // Placeholder geo bounds (updated in save_all_with_geo)
+            0.0,
+            0.0,
+            0.0,
+            0.0, // Placeholder geo bounds (updated in save_all_with_geo)
             self.godot_scale,
             self.chunk_grid.chunk_size,
         )?;
@@ -186,12 +195,16 @@ impl SceneWriter {
             .collect();
 
         // load_steps = chunk PackedScenes + script/texture resources + scene subresources.
-        let load_steps = non_empty.len() as u32 + 9;
-        writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
+        let load_steps = non_empty.len() as u32 + 10;
+        writeln!(
+            f,
+            "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]"
+        )?;
         writeln!(f)?;
 
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
         writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]")?;
+        writeln!(f, "[ext_resource type=\"PackedScene\" path=\"res://scenes/roads.tscn\" id=\"roads_scene\"]")?;
 
         // Ext resources: each chunk PackedScene
         let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
@@ -202,10 +215,16 @@ impl SceneWriter {
         }
         writeln!(f)?;
 
-        let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32 * 0.5 * self.godot_scale;
-        let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32 * 0.5 * self.godot_scale;
-        let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32 * self.godot_scale;
-        let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
+        let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32
+            * 0.5
+            * self.godot_scale;
+        let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32
+            * 0.5
+            * self.godot_scale;
+        let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32
+            * self.godot_scale;
+        let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32
+            * self.godot_scale;
         let span = span_x.max(span_z).max(1.0);
         let floor_size_x = span_x.max(16.0) + 64.0;
         let floor_size_z = span_z.max(16.0) + 64.0;
@@ -250,7 +269,10 @@ impl SceneWriter {
         writeln!(f)?;
 
         writeln!(f, "[sub_resource type=\"BoxShape3D\" id=\"7\"]")?;
-        writeln!(f, "size = Vector3({floor_size_x:.4}, 1.0, {floor_size_z:.4})")?;
+        writeln!(
+            f,
+            "size = Vector3({floor_size_x:.4}, 1.0, {floor_size_z:.4})"
+        )?;
         writeln!(f)?;
 
         // Root
@@ -258,12 +280,18 @@ impl SceneWriter {
         writeln!(f)?;
 
         // WorldEnvironment
-        writeln!(f, "[node name=\"WorldEnvironment\" type=\"WorldEnvironment\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"WorldEnvironment\" type=\"WorldEnvironment\" parent=\".\"]"
+        )?;
         writeln!(f, "environment = SubResource(\"3\")")?;
         writeln!(f)?;
 
         // DirectionalLight (sun)
-        writeln!(f, "[node name=\"Sun\" type=\"DirectionalLight3D\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"Sun\" type=\"DirectionalLight3D\" parent=\".\"]"
+        )?;
         writeln!(f, "transform = Transform3D(0.707, 0.408, -0.577, 0, 0.816, 0.577, 0.707, -0.408, 0.577, 0, 0, 0)")?;
         writeln!(f, "light_color = Color(1, 0.92, 0.78, 1)")?;
         writeln!(f, "light_energy = 2.4")?;
@@ -272,7 +300,10 @@ impl SceneWriter {
 
         let (player_x, player_y, player_z) = self.player_spawn_godot(world_cx, world_cz, span);
 
-        writeln!(f, "[node name=\"SunDisk\" type=\"MeshInstance3D\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"SunDisk\" type=\"MeshInstance3D\" parent=\".\"]"
+        )?;
         writeln!(f, "transform = Transform3D(5, 0, 0, 0, 5, 0, 0, 0, 5, {world_cx:.4}, 140.0000, {sun_z:.4})", sun_z = world_cz - span * 0.35)?;
         writeln!(f, "mesh = SubResource(\"5\")")?;
         writeln!(f, "material_override = SubResource(\"6\")")?;
@@ -292,7 +323,10 @@ impl SceneWriter {
             let cloud_x = world_cx + span * dx;
             let cloud_z = world_cz + span * dz;
             let pixel_size = 0.055 * f32::max(*sx, *sz);
-            writeln!(f, "[node name=\"Cloud_{i}\" type=\"Sprite3D\" parent=\"Clouds\"]")?;
+            writeln!(
+                f,
+                "[node name=\"Cloud_{i}\" type=\"Sprite3D\" parent=\"Clouds\"]"
+            )?;
             writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {cloud_x:.4}, {dy:.4}, {cloud_z:.4})")?;
             writeln!(f, "billboard = 1")?;
             writeln!(f, "transparent = true")?;
@@ -302,33 +336,60 @@ impl SceneWriter {
             writeln!(f)?;
         }
 
-        writeln!(f, "[node name=\"WorldFloor\" type=\"StaticBody3D\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"WorldFloor\" type=\"StaticBody3D\" parent=\".\"]"
+        )?;
         writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {world_cx:.4}, -0.5000, {world_cz:.4})")?;
         writeln!(f)?;
 
-        writeln!(f, "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]")?;
+        writeln!(
+            f,
+            "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]"
+        )?;
         writeln!(f, "shape = SubResource(\"7\")")?;
         writeln!(f)?;
 
-        writeln!(f, "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"
+        )?;
         writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {player_x:.4}, {player_y:.4}, {player_z:.4})")?;
         writeln!(f, "floor_snap_length = 0.35")?;
         writeln!(f, "script = ExtResource(\"player_script\")")?;
         writeln!(f)?;
 
-        writeln!(f, "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"Player\"]")?;
+        writeln!(
+            f,
+            "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"Player\"]"
+        )?;
         writeln!(f, "shape = SubResource(\"4\")")?;
         writeln!(f)?;
 
-        writeln!(f, "[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]")?;
-        writeln!(f, "transform = Transform3D(1, 0, 0, 0, 0.9781, -0.2079, 0, 0.2079, 0.9781, 0, 1.6, 0)")?;
+        writeln!(
+            f,
+            "[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]"
+        )?;
+        writeln!(
+            f,
+            "transform = Transform3D(1, 0, 0, 0, 0.9781, -0.2079, 0, 0.2079, 0.9781, 0, 1.6, 0)"
+        )?;
         writeln!(f, "current = true")?;
         writeln!(f, "far = 10000.0")?;
         writeln!(f)?;
 
+        writeln!(
+            f,
+            "[node name=\"Roads\" parent=\".\" instance=ExtResource(\"roads_scene\")]"
+        )?;
+        writeln!(f)?;
+
         // Chunk instances
         let chunks_group = "Chunks";
-        writeln!(f, "[node name=\"{chunks_group}\" type=\"Node3D\" parent=\".\"]")?;
+        writeln!(
+            f,
+            "[node name=\"{chunks_group}\" type=\"Node3D\" parent=\".\"]"
+        )?;
         writeln!(f)?;
 
         for coord in &non_empty {
@@ -338,8 +399,14 @@ impl SceneWriter {
             let (min_x, min_z, _, _) = chunk.world_bounds;
             let gx = min_x as f32 * self.godot_scale;
             let gz = -(min_z as f32) * self.godot_scale;
-            writeln!(f, "[node name=\"{cname}\" parent=\"{chunks_group}\" instance=ExtResource(\"{eid}\")]")?;
-            writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {gx}, 0, {gz})")?;
+            writeln!(
+                f,
+                "[node name=\"{cname}\" parent=\"{chunks_group}\" instance=ExtResource(\"{eid}\")]"
+            )?;
+            writeln!(
+                f,
+                "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {gx}, 0, {gz})"
+            )?;
             writeln!(f)?;
         }
 
@@ -410,7 +477,8 @@ impl SceneWriter {
         draw_cloud_ellipse(&mut img, 298.0, 70.0, 58.0, 58.0, [255, 255, 255, 235]);
         draw_cloud_ellipse(&mut img, 364.0, 88.0, 44.0, 44.0, [255, 255, 255, 235]);
 
-        img.save(&path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        img.save(&path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         Ok(())
     }
@@ -428,12 +496,18 @@ impl SceneWriter {
         writeln!(f, "@export var noclip_speed_multiplier := 2.5")?;
         writeln!(f, "@export var jump_velocity := 5.5")?;
         writeln!(f, "@export var mouse_sensitivity := 0.0025")?;
-        writeln!(f, "var gravity := float(ProjectSettings.get_setting(\"physics/3d/default_gravity\"))")?;
+        writeln!(
+            f,
+            "var gravity := float(ProjectSettings.get_setting(\"physics/3d/default_gravity\"))"
+        )?;
         writeln!(f, "var noclip := false")?;
         writeln!(f, "var look_enabled := true")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
-        writeln!(f, "@onready var collision_shape: CollisionShape3D = $CollisionShape3D")?;
+        writeln!(
+            f,
+            "@onready var collision_shape: CollisionShape3D = $CollisionShape3D"
+        )?;
         writeln!(f)?;
         writeln!(f, "func _ready() -> void:")?;
         writeln!(f, "\tlook_enabled = true")?;
@@ -455,17 +529,29 @@ impl SceneWriter {
         writeln!(f, "\t\tcollision_shape.disabled = noclip")?;
         writeln!(f, "\tif event is InputEventMouseMotion and look_enabled:")?;
         writeln!(f, "\t\trotate_y(-event.relative.x * mouse_sensitivity)")?;
-        writeln!(f, "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)")?;
-        writeln!(f, "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))")?;
+        writeln!(
+            f,
+            "\t\tcamera.rotate_x(-event.relative.y * mouse_sensitivity)"
+        )?;
+        writeln!(
+            f,
+            "\t\tcamera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-85.0), deg_to_rad(85.0))"
+        )?;
         writeln!(f)?;
         writeln!(f, "func _physics_process(delta: float) -> void:")?;
         writeln!(f, "\tvar input_dir := _movement_input_vector()")?;
         writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
         writeln!(f, "\tvar speed := move_speed")?;
-        writeln!(f, "\tif Input.is_action_pressed(\"sprint\") or Input.is_key_pressed(KEY_SHIFT):")?;
+        writeln!(
+            f,
+            "\tif Input.is_action_pressed(\"sprint\") or Input.is_key_pressed(KEY_SHIFT):"
+        )?;
         writeln!(f, "\t\tspeed *= sprint_multiplier")?;
         writeln!(f, "\tif noclip:")?;
-        writeln!(f, "\t\t_noclip_move(delta, direction, speed * noclip_speed_multiplier)")?;
+        writeln!(
+            f,
+            "\t\t_noclip_move(delta, direction, speed * noclip_speed_multiplier)"
+        )?;
         writeln!(f, "\t\treturn")?;
         writeln!(f, "\tvelocity.x = direction.x * speed")?;
         writeln!(f, "\tvelocity.z = direction.z * speed")?;
@@ -478,31 +564,52 @@ impl SceneWriter {
         writeln!(f, "\t\tvelocity.y -= gravity * delta")?;
         writeln!(f, "\tmove_and_slide()")?;
         writeln!(f)?;
-        writeln!(f, "func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:")?;
+        writeln!(
+            f,
+            "func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:"
+        )?;
         writeln!(f, "\tvar vertical := 0.0")?;
         writeln!(f, "\tif Input.is_action_pressed(\"jump\"):")?;
         writeln!(f, "\t\tvertical += 1.0")?;
         writeln!(f, "\tif Input.is_action_pressed(\"descend\"):")?;
         writeln!(f, "\t\tvertical -= 1.0")?;
-        writeln!(f, "\tglobal_position += (direction + Vector3.UP * vertical).normalized() * speed * delta")?;
+        writeln!(
+            f,
+            "\tglobal_position += (direction + Vector3.UP * vertical).normalized() * speed * delta"
+        )?;
         writeln!(f, "\tvelocity = Vector3.ZERO")?;
         writeln!(f)?;
         writeln!(f, "func _movement_input_vector() -> Vector2:")?;
         writeln!(f, "\tvar input_dir := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_backward\")")?;
         writeln!(f, "\tvar direct := Vector2.ZERO")?;
-        writeln!(f, "\tif Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):")?;
+        writeln!(
+            f,
+            "\tif Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):"
+        )?;
         writeln!(f, "\t\tdirect.x -= 1.0")?;
-        writeln!(f, "\tif Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):")?;
+        writeln!(
+            f,
+            "\tif Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):"
+        )?;
         writeln!(f, "\t\tdirect.x += 1.0")?;
-        writeln!(f, "\tif Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):")?;
+        writeln!(
+            f,
+            "\tif Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):"
+        )?;
         writeln!(f, "\t\tdirect.y -= 1.0")?;
-        writeln!(f, "\tif Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):")?;
+        writeln!(
+            f,
+            "\tif Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):"
+        )?;
         writeln!(f, "\t\tdirect.y += 1.0")?;
         writeln!(f, "\tif direct.length_squared() > 0.0:")?;
         writeln!(f, "\t\treturn direct.normalized()")?;
         writeln!(f, "\treturn input_dir")?;
         writeln!(f)?;
-        writeln!(f, "func _is_key_pressed_once(event: InputEvent, key: Key) -> bool:")?;
+        writeln!(
+            f,
+            "func _is_key_pressed_once(event: InputEvent, key: Key) -> bool:"
+        )?;
         writeln!(f, "\tif not (event is InputEventKey):")?;
         writeln!(f, "\t\treturn false")?;
         writeln!(f, "\tvar key_event := event as InputEventKey")?;
@@ -529,13 +636,22 @@ impl SceneWriter {
         writeln!(f, "\t_clear_generated_children()")?;
         writeln!(f, "\tif mesh_data_path.is_empty():")?;
         writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar file := FileAccess.open(mesh_data_path, FileAccess.READ)")?;
+        writeln!(
+            f,
+            "\tvar file := FileAccess.open(mesh_data_path, FileAccess.READ)"
+        )?;
         writeln!(f, "\tif file == null:")?;
-        writeln!(f, "\t\tpush_error(\"Failed to open mesh data: \" + mesh_data_path)")?;
+        writeln!(
+            f,
+            "\t\tpush_error(\"Failed to open mesh data: \" + mesh_data_path)"
+        )?;
         writeln!(f, "\t\treturn")?;
         writeln!(f, "\tvar parsed = JSON.parse_string(file.get_as_text())")?;
         writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
-        writeln!(f, "\t\tpush_error(\"Invalid mesh data: \" + mesh_data_path)")?;
+        writeln!(
+            f,
+            "\t\tpush_error(\"Invalid mesh data: \" + mesh_data_path)"
+        )?;
         writeln!(f, "\t\treturn")?;
         writeln!(f, "\tfor element in parsed.get(\"elements\", []):")?;
         writeln!(f, "\t\t_add_mesh_instance(element)")?;
@@ -550,26 +666,59 @@ impl SceneWriter {
         writeln!(f, "\tvar mesh := ArrayMesh.new()")?;
         writeln!(f, "\tvar arrays := []")?;
         writeln!(f, "\tarrays.resize(Mesh.ARRAY_MAX)")?;
-        writeln!(f, "\tarrays[Mesh.ARRAY_VERTEX] = _to_vec3_array(element.get(\"vertices\", []))")?;
-        writeln!(f, "\tarrays[Mesh.ARRAY_NORMAL] = _to_vec3_array(element.get(\"normals\", []))")?;
-        writeln!(f, "\tarrays[Mesh.ARRAY_TEX_UV] = _to_vec2_array(element.get(\"uvs\", []))")?;
-        writeln!(f, "\tarrays[Mesh.ARRAY_INDEX] = _to_int_array(element.get(\"indices\", []))")?;
-        writeln!(f, "\tif arrays[Mesh.ARRAY_VERTEX].is_empty() or arrays[Mesh.ARRAY_INDEX].is_empty():")?;
+        writeln!(
+            f,
+            "\tarrays[Mesh.ARRAY_VERTEX] = _to_vec3_array(element.get(\"vertices\", []))"
+        )?;
+        writeln!(
+            f,
+            "\tarrays[Mesh.ARRAY_NORMAL] = _to_vec3_array(element.get(\"normals\", []))"
+        )?;
+        writeln!(
+            f,
+            "\tarrays[Mesh.ARRAY_TEX_UV] = _to_vec2_array(element.get(\"uvs\", []))"
+        )?;
+        writeln!(
+            f,
+            "\tarrays[Mesh.ARRAY_INDEX] = _to_int_array(element.get(\"indices\", []))"
+        )?;
+        writeln!(
+            f,
+            "\tif arrays[Mesh.ARRAY_VERTEX].is_empty() or arrays[Mesh.ARRAY_INDEX].is_empty():"
+        )?;
         writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)")?;
+        writeln!(
+            f,
+            "\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)"
+        )?;
         writeln!(f, "\tvar instance := MeshInstance3D.new()")?;
         writeln!(f, "\tinstance.name = str(element.get(\"name\", \"Mesh\"))")?;
         writeln!(f, "\tinstance.mesh = mesh")?;
-        writeln!(f, "\tinstance.transform = _to_transform(element.get(\"transform\", []))")?;
-        writeln!(f, "\tvar material_name := str(element.get(\"material\", \"terrain_grass\"))")?;
-        writeln!(f, "\tvar material = load(\"res://materials/\" + material_name + \".tres\")")?;
+        writeln!(
+            f,
+            "\tinstance.transform = _to_transform(element.get(\"transform\", []))"
+        )?;
+        writeln!(
+            f,
+            "\tvar material_name := str(element.get(\"material\", \"terrain_grass\"))"
+        )?;
+        writeln!(
+            f,
+            "\tvar material = load(\"res://materials/\" + material_name + \".tres\")"
+        )?;
         writeln!(f, "\tif material != null:")?;
         writeln!(f, "\t\tinstance.set_surface_override_material(0, material)")?;
         writeln!(f, "\tinstance.set_meta(\"osm_generated\", true)")?;
         writeln!(f, "\tadd_child(instance)")?;
-        writeln!(f, "\tinstance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner")?;
+        writeln!(
+            f,
+            "\tinstance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner"
+        )?;
         writeln!(f, "\tif _should_add_collision(material_name):")?;
-        writeln!(f, "\t\t_add_collision_body(str(instance.name), mesh, instance.transform)")?;
+        writeln!(
+            f,
+            "\t\t_add_collision_body(str(instance.name), mesh, instance.transform)"
+        )?;
         writeln!(f)?;
         writeln!(f, "func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:")?;
         writeln!(f, "\tvar body := StaticBody3D.new()")?;
@@ -580,24 +729,42 @@ impl SceneWriter {
         writeln!(f, "\tshape.shape = mesh.create_trimesh_shape()")?;
         writeln!(f, "\tbody.add_child(shape)")?;
         writeln!(f, "\tadd_child(body)")?;
-        writeln!(f, "\tbody.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner")?;
+        writeln!(
+            f,
+            "\tbody.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner"
+        )?;
         writeln!(f, "\tshape.owner = body.owner")?;
         writeln!(f)?;
-        writeln!(f, "func _should_add_collision(material_name: String) -> bool:")?;
+        writeln!(
+            f,
+            "func _should_add_collision(material_name: String) -> bool:"
+        )?;
         writeln!(f, "\treturn (")?;
         writeln!(f, "\t\tmaterial_name.begins_with(\"terrain_\")")?;
         writeln!(f, "\t)")?;
         writeln!(f)?;
-        writeln!(f, "func _to_vec3_array(values: Array) -> PackedVector3Array:")?;
+        writeln!(
+            f,
+            "func _to_vec3_array(values: Array) -> PackedVector3Array:"
+        )?;
         writeln!(f, "\tvar out := PackedVector3Array()")?;
         writeln!(f, "\tfor i in range(0, values.size() - 2, 3):")?;
-        writeln!(f, "\t\tout.append(Vector3(float(values[i]), float(values[i + 1]), float(values[i + 2])))")?;
+        writeln!(
+            f,
+            "\t\tout.append(Vector3(float(values[i]), float(values[i + 1]), float(values[i + 2])))"
+        )?;
         writeln!(f, "\treturn out")?;
         writeln!(f)?;
-        writeln!(f, "func _to_vec2_array(values: Array) -> PackedVector2Array:")?;
+        writeln!(
+            f,
+            "func _to_vec2_array(values: Array) -> PackedVector2Array:"
+        )?;
         writeln!(f, "\tvar out := PackedVector2Array()")?;
         writeln!(f, "\tfor i in range(0, values.size() - 1, 2):")?;
-        writeln!(f, "\t\tout.append(Vector2(float(values[i]), float(values[i + 1])))")?;
+        writeln!(
+            f,
+            "\t\tout.append(Vector2(float(values[i]), float(values[i + 1])))"
+        )?;
         writeln!(f, "\treturn out")?;
         writeln!(f)?;
         writeln!(f, "func _to_int_array(values: Array) -> PackedInt32Array:")?;
@@ -610,10 +777,22 @@ impl SceneWriter {
         writeln!(f, "\tif values.size() < 12:")?;
         writeln!(f, "\t\treturn Transform3D.IDENTITY")?;
         writeln!(f, "\treturn Transform3D(Basis(")?;
-        writeln!(f, "\t\tVector3(float(values[0]), float(values[1]), float(values[2])),")?;
-        writeln!(f, "\t\tVector3(float(values[3]), float(values[4]), float(values[5])),")?;
-        writeln!(f, "\t\tVector3(float(values[6]), float(values[7]), float(values[8]))")?;
-        writeln!(f, "\t), Vector3(float(values[9]), float(values[10]), float(values[11])))")?;
+        writeln!(
+            f,
+            "\t\tVector3(float(values[0]), float(values[1]), float(values[2])),"
+        )?;
+        writeln!(
+            f,
+            "\t\tVector3(float(values[3]), float(values[4]), float(values[5])),"
+        )?;
+        writeln!(
+            f,
+            "\t\tVector3(float(values[6]), float(values[7]), float(values[8]))"
+        )?;
+        writeln!(
+            f,
+            "\t), Vector3(float(values[9]), float(values[10]), float(values[11])))"
+        )?;
 
         Ok(())
     }
@@ -633,7 +812,14 @@ impl SceneWriter {
     }
 }
 
-fn draw_cloud_ellipse(img: &mut image::RgbaImage, cx: f32, cy: f32, rx: f32, ry: f32, rgba: [u8; 4]) {
+fn draw_cloud_ellipse(
+    img: &mut image::RgbaImage,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    rgba: [u8; 4],
+) {
     let min_x = ((cx - rx).floor() as i32).max(0) as u32;
     let max_x = ((cx + rx).ceil() as i32).min(img.width() as i32 - 1) as u32;
     let min_y = ((cy - ry).floor() as i32).max(0) as u32;
@@ -670,7 +856,9 @@ fn spawn_material_priority(material_type: MaterialType) -> Option<u8> {
     match material_type {
         MaterialType::RoadSidewalk => Some(0),
         MaterialType::RoadAsphalt => Some(1),
-        MaterialType::TerrainGrass | MaterialType::TerrainBuiltUp | MaterialType::TerrainDirt => Some(2),
+        MaterialType::TerrainGrass | MaterialType::TerrainBuiltUp | MaterialType::TerrainDirt => {
+            Some(2)
+        }
         _ => None,
     }
 }
@@ -684,7 +872,8 @@ mod tests {
 
     fn unit_mesh() -> MeshData {
         let mut mesh = MeshData::new();
-        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
+        mesh.vertices
+            .extend_from_slice(&[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
         mesh
     }
 
@@ -697,7 +886,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\"Player\"]"));
         assert!(master.contains("current = true"));
         assert!(!master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
@@ -712,7 +902,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"));
         assert!(master.contains("[node name=\"Chunks\" type=\"Node3D\" parent=\".\"]"));
         assert!(!master.contains("parent=\"World\""));
@@ -734,9 +925,35 @@ mod tests {
         );
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[node name=\"Chunk_0_0\" parent=\"Chunks\" instance=ExtResource("));
         assert!(!master.contains("\ninstance = ExtResource("));
+    }
+
+    #[test]
+    fn master_scene_loads_independent_roads_scene() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.add_mesh(
+            "Highway_1".to_string(),
+            unit_mesh(),
+            MaterialType::RoadAsphalt,
+            128,
+            128,
+        );
+        scene.save_all().unwrap();
+
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(tmp.path().join("scenes").join("roads.tscn").exists());
+        assert!(tmp.path().join("mesh_data").join("roads.json").exists());
+        assert!(master.contains("[ext_resource type=\"PackedScene\" path=\"res://scenes/roads.tscn\" id=\"roads_scene\"]"));
+        assert!(master
+            .contains("[node name=\"Roads\" parent=\".\" instance=ExtResource(\"roads_scene\")]"));
     }
 
     #[test]
@@ -748,7 +965,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]"));
         assert!(master.contains("[node name=\"Player\" type=\"CharacterBody3D\" parent=\".\"]"));
         assert!(master.contains("script = ExtResource(\"player_script\")"));
@@ -766,10 +984,13 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[sub_resource type=\"BoxShape3D\" id=\"7\"]"));
         assert!(master.contains("[node name=\"WorldFloor\" type=\"StaticBody3D\" parent=\".\"]"));
-        assert!(master.contains("[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]"));
+        assert!(master.contains(
+            "[node name=\"CollisionShape3D\" type=\"CollisionShape3D\" parent=\"WorldFloor\"]"
+        ));
         assert!(master.contains("shape = SubResource(\"7\")"));
     }
 
@@ -782,7 +1003,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         assert!(master.contains("[sub_resource type=\"ProceduralSkyMaterial\""));
         assert!(master.contains("[sub_resource type=\"Sky\""));
         assert!(master.contains("background_mode = 2"));
@@ -800,12 +1022,19 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
-        assert!(tmp.path().join("assets").join("cloud_billboard.png").exists());
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(tmp
+            .path()
+            .join("assets")
+            .join("cloud_billboard.png")
+            .exists());
         assert!(master.contains("[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]"));
         assert!(master.contains("[node name=\"Cloud_0\" type=\"Sprite3D\" parent=\"Clouds\"]"));
         assert!(master.contains("texture = ExtResource(\"cloud_texture\")"));
-        assert!(!master.contains("[node name=\"Cloud_0\" type=\"MeshInstance3D\" parent=\"Clouds\"]"));
+        assert!(
+            !master.contains("[node name=\"Cloud_0\" type=\"MeshInstance3D\" parent=\"Clouds\"]")
+        );
     }
 
     #[test]
@@ -817,7 +1046,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         let player_line = master
             .lines()
             .skip_while(|line| !line.contains("[node name=\"Player\""))
@@ -845,7 +1075,8 @@ mod tests {
         );
         scene.save_all().unwrap();
 
-        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
         let player_line = master
             .lines()
             .skip_while(|line| !line.contains("[node name=\"Player\""))
@@ -866,7 +1097,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
         assert!(script.contains("default_gravity"));
         assert!(script.contains("is_on_floor()"));
         assert!(script.contains("@export var jump_velocity"));
@@ -883,10 +1115,13 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
         assert!(script.contains("var noclip := false"));
         assert!(script.contains("noclip_toggle"));
-        assert!(script.contains("func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:"));
+        assert!(script.contains(
+            "func _noclip_move(delta: float, direction: Vector3, speed: float) -> void:"
+        ));
         assert!(script.contains("collision_shape.disabled = noclip"));
     }
 
@@ -899,7 +1134,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
         assert!(script.contains("func _input(event: InputEvent) -> void:"));
         assert!(script.contains("event is InputEventMouseButton"));
         assert!(script.contains("MOUSE_BUTTON_LEFT"));
@@ -918,7 +1154,8 @@ mod tests {
 
         scene.save_all().unwrap();
 
-        let script = std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
         assert!(script.contains("func _movement_input_vector() -> Vector2:"));
         assert!(script.contains("Input.is_key_pressed(KEY_W)"));
         assert!(script.contains("Input.is_key_pressed(KEY_UP)"));
@@ -936,7 +1173,8 @@ mod tests {
         scene.save_all().unwrap();
 
         let script =
-            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd")).unwrap();
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
+                .unwrap();
         assert!(script.contains("StaticBody3D.new()"));
         assert!(script.contains("CollisionShape3D.new()"));
         assert!(script.contains("mesh.create_trimesh_shape()"));

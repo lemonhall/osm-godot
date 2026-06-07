@@ -65,15 +65,15 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 
 ### 上海外滩示例
 
-这份外滩/陆家嘴区域工程已经用 Godot 4.6 headless 端到端跑过玩家移动、鼠标视角、noclip 和资源导入验证。
+这份外滩/陆家嘴区域工程已经用 Godot 4.6 headless 端到端跑过资源导入、独立道路场景加载、玩家移动、鼠标视角和 noclip 验证。
 
 ```powershell
-$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v1-e2e --chunk-size 128
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v3-roads-fixed --chunk-size 128
 ```
 
 生成结果：
 
-- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v1-e2e\project.godot`
+- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v3-roads-fixed\project.godot`
 - 范围：`31.2290,121.4820,31.2455,121.5100`
 - 建筑：`1105`
 - 道路：`1614`
@@ -110,13 +110,15 @@ output/
 │   ├── water.tres
 │   └── ...
 ├── mesh_data/                 # 每个区块的 ArrayMesh JSON 数据
+│   ├── roads.json             # 全图道路 mesh，独立于区块加载
 │   ├── Chunk_0_0.json
 │   └── ...
 ├── scripts/                   # Godot 运行时脚本
 │   ├── chunk_mesh_loader.gd
 │   └── fps_player.gd
 └── scenes/                    # 场景文件
-    ├── master.tscn            # 主场景（天空、太阳、云、玩家、所有区块）
+    ├── master.tscn            # 主场景（天空、太阳、云、玩家、道路、所有区块）
+    ├── roads.tscn             # 独立道路场景，由 master.tscn 直接加载
     ├── Chunk_0_0.tscn         # 轻量区块 loader 场景
     ├── Chunk_0_1.tscn
     └── ...

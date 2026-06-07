@@ -186,6 +186,12 @@ pub fn write_material(mat_type: MaterialType, materials_dir: &Path) -> io::Resul
     writeln!(f, "specular_mode = 1")?;
     writeln!(f, "roughness = {}", roughness)?;
     writeln!(f, "metallic = {}", metallic)?;
+    if matches!(
+        mat_type,
+        MaterialType::RoadAsphalt | MaterialType::RoadSidewalk
+    ) {
+        writeln!(f, "cull_mode = 2")?;
+    }
     if a >= 1.0 {
         writeln!(f, "rim_enabled = true")?;
         writeln!(f, "rim = 0.28")?;
@@ -194,7 +200,9 @@ pub fn write_material(mat_type: MaterialType, materials_dir: &Path) -> io::Resul
 
     if matches!(
         mat_type,
-        MaterialType::BuildingWindow | MaterialType::BuildingWallGlass | MaterialType::BuildingWallGreenhouse
+        MaterialType::BuildingWindow
+            | MaterialType::BuildingWallGlass
+            | MaterialType::BuildingWallGreenhouse
     ) {
         writeln!(f, "emission_enabled = true")?;
         writeln!(f, "emission = Color({}, {}, {}, 1)", r, g, b)?;
@@ -250,7 +258,10 @@ mod tests {
         let grass = MaterialType::TerrainGrass.albedo();
         let sidewalk = MaterialType::RoadSidewalk.albedo();
 
-        assert!(grass.1 >= 0.65, "grass should read as saturated green: {grass:?}");
+        assert!(
+            grass.1 >= 0.65,
+            "grass should read as saturated green: {grass:?}"
+        );
         assert!(
             sidewalk.0 >= 0.72 && sidewalk.1 >= 0.68,
             "sidewalk should contrast against asphalt and buildings: {sidewalk:?}"
@@ -267,5 +278,18 @@ mod tests {
         assert!(material.contains("diffuse_mode = 3"));
         assert!(material.contains("specular_mode = 1"));
         assert!(material.contains("rim_enabled = true"));
+    }
+
+    #[test]
+    fn road_materials_disable_backface_culling() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_material(MaterialType::RoadAsphalt, tmp.path()).unwrap();
+        write_material(MaterialType::RoadSidewalk, tmp.path()).unwrap();
+
+        let asphalt = std::fs::read_to_string(tmp.path().join("road_asphalt.tres")).unwrap();
+        let sidewalk = std::fs::read_to_string(tmp.path().join("road_sidewalk.tres")).unwrap();
+        assert!(asphalt.contains("cull_mode = 2"));
+        assert!(sidewalk.contains("cull_mode = 2"));
     }
 }

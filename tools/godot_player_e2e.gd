@@ -3,6 +3,8 @@ extends SceneTree
 const MIN_NORMAL_MOVE := 8.0
 const MIN_NOCLIP_MOVE := 0.5
 const MIN_MOUSE_YAW := 0.001
+const MIN_ROAD_MESHES := 1
+const MIN_ROAD_WORLD_SPAN := 200.0
 
 func _initialize() -> void:
 	call_deferred("_run")
@@ -36,6 +38,25 @@ func _run() -> void:
 	print("E2E collision_disabled_initial=", player.get_node("CollisionShape3D").disabled)
 	print("E2E floor_initial=", player.is_on_floor())
 	var spawn_position: Vector3 = player.global_position
+	var roads: Node = scene.get_node_or_null("Roads")
+	var road_mesh_count := 0
+	var road_world_span := 0.0
+	if roads != null:
+		road_mesh_count = _count_road_mesh_instances(roads)
+		var road_bounds: Dictionary = {
+			"min_x": INF,
+			"max_x": -INF,
+			"min_z": INF,
+			"max_z": -INF,
+		}
+		_accumulate_road_mesh_bounds(roads, road_bounds)
+		road_world_span = max(
+			float(road_bounds["max_x"]) - float(road_bounds["min_x"]),
+			float(road_bounds["max_z"]) - float(road_bounds["min_z"])
+		)
+	print("E2E roads_node_exists=", roads != null)
+	print("E2E road_mesh_count=", road_mesh_count)
+	print("E2E road_world_span=", road_world_span)
 
 	var yaw_before: float = player.rotation.y
 	var pitch_before: float = camera.rotation.x
@@ -78,8 +99,44 @@ func _run() -> void:
 	if noclip_move < MIN_NOCLIP_MOVE:
 		push_error("E2E noclip mode did not move player")
 		failed = true
+	if road_mesh_count < MIN_ROAD_MESHES:
+		push_error("E2E roads scene did not load visible road meshes")
+		failed = true
+	if road_world_span < MIN_ROAD_WORLD_SPAN:
+		push_error("E2E roads scene meshes are not spread across world coordinates")
+		failed = true
 
 	quit(1 if failed else 0)
+
+func _count_road_mesh_instances(node: Node) -> int:
+	var count := 0
+	if node is MeshInstance3D:
+		var material_name := ""
+		var mesh_node := node as MeshInstance3D
+		var material: Material = mesh_node.get_surface_override_material(0)
+		if material != null:
+			material_name = str(material.resource_path)
+		if str(node.name).begins_with("Highway") or material_name.contains("road_"):
+			count += 1
+	for child: Node in node.get_children():
+		count += _count_road_mesh_instances(child)
+	return count
+
+func _accumulate_road_mesh_bounds(node: Node, bounds: Dictionary) -> void:
+	if node is MeshInstance3D:
+		var mesh_node := node as MeshInstance3D
+		var material_name := ""
+		var material: Material = mesh_node.get_surface_override_material(0)
+		if material != null:
+			material_name = str(material.resource_path)
+		if str(node.name).begins_with("Highway") or material_name.contains("road_"):
+			var origin: Vector3 = mesh_node.global_transform.origin
+			bounds["min_x"] = min(float(bounds["min_x"]), origin.x)
+			bounds["max_x"] = max(float(bounds["max_x"]), origin.x)
+			bounds["min_z"] = min(float(bounds["min_z"]), origin.z)
+			bounds["max_z"] = max(float(bounds["max_z"]), origin.z)
+	for child: Node in node.get_children():
+		_accumulate_road_mesh_bounds(child, bounds)
 
 func _measure_move(player: CharacterBody3D, label: String, spawn_position: Vector3, frames := 90) -> float:
 	player.global_position = spawn_position
