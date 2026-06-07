@@ -13,6 +13,8 @@ mod osm_parser;
 mod progress;
 mod retrieve_data;
 mod scene_writer;
+#[cfg(test)]
+mod test_utilities;
 
 use args::Args;
 use clap::Parser;

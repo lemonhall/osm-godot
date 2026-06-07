@@ -1,6 +1,6 @@
 //! Terrain mesh generation — creates a heightmap-based ground mesh for each chunk.
 
-use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
+use crate::coordinate_system::cartesian::XZPoint;
 use crate::ground::Ground;
 use crate::scene_writer::chunk_grid::{ChunkCoord, ChunkGrid};
 use crate::scene_writer::geometry::MeshData;
@@ -23,8 +23,6 @@ pub fn generate_terrain(
 
         let chunk = &mut chunk_grid.chunks.get_mut(&coord).unwrap();
         let (min_x, min_z, _, _) = chunk.world_bounds;
-        let gx = min_x as f32 * godot_scale;
-        let gz = -(min_z as f32) * godot_scale;
 
         // Determine material based on land cover
         let material = if let Some(lc) = ground.land_cover_grid() {
@@ -44,7 +42,7 @@ pub fn generate_terrain(
             name: format!("Terrain_{}_{}", coord.0, coord.1),
             mesh_data: terrain_mesh,
             material_type: material,
-            transform: tscn_writer::translation_transform(gx, 0.0, gz),
+            transform: tscn_writer::translation_transform(0.0, 0.0, 0.0),
         });
     }
 }
@@ -83,14 +81,12 @@ fn build_chunk_terrain(
         }
     }
 
-    // Build vertices (in Godot local coords within the chunk)
-    let base_gx = min_x as f32 * godot_scale;
-    let base_gz = -(min_z as f32) * godot_scale;
-
     for ri in 0..rows {
         for ci in 0..cols {
-            let x = (ci as i32 * step) as f32 * godot_scale - base_gx;
-            let z = -(ri as i32 * step) as f32 * godot_scale - base_gz;
+            let wx = min_x + ci as i32 * step;
+            let wz = min_z + ri as i32 * step;
+            let x = (wx - min_x) as f32 * godot_scale;
+            let z = -((wz - min_z) as f32) * godot_scale;
             let y = heights[ri][ci];
             vertices.push(x);
             vertices.push(y);
@@ -191,5 +187,48 @@ fn land_cover_to_material(lc_class: u8) -> MaterialType {
         95 => MaterialType::TerrainGrass, // Mangroves
         100 => MaterialType::TerrainDirt, // Moss/lichen
         _ => MaterialType::TerrainGrass,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coordinate_system::cartesian::XZBBox;
+
+    #[test]
+    fn terrain_mesh_is_local_to_its_chunk() {
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let mut chunk_grid = ChunkGrid::new(&bbox, 256);
+        let ground = Arc::new(Ground::new_flat(0));
+
+        generate_terrain(&mut chunk_grid, &ground, 0.5);
+
+        let chunk = &chunk_grid.chunks[&ChunkCoord(1, 1)];
+        let terrain = chunk
+            .elements
+            .iter()
+            .find(|element| {
+                matches!(
+                    element,
+                    crate::scene_writer::chunk_grid::SceneElement::Mesh { name, .. }
+                        if name == "Terrain_1_1"
+                )
+            })
+            .expect("terrain mesh for chunk 1,1");
+
+        let crate::scene_writer::chunk_grid::SceneElement::Mesh {
+            transform,
+            mesh_data,
+            ..
+        } = terrain
+        else {
+            panic!("expected mesh element");
+        };
+
+        assert_eq!(transform[9], 0.0);
+        assert_eq!(transform[10], 0.0);
+        assert_eq!(transform[11], 0.0);
+        assert_eq!(mesh_data.vertices[0], 0.0);
+        assert_eq!(mesh_data.vertices[2], 0.0);
     }
 }

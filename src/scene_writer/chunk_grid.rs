@@ -140,8 +140,9 @@ impl ChunkGrid {
         ground_y: f32,
     ) {
         if let Some(coord) = self.chunk_for(world_x, world_z) {
-            let gx = world_x as f32 * godot_scale;
-            let gz = -(world_z as f32) * godot_scale;
+            let (min_x, min_z, _, _) = self.chunks[&coord].world_bounds;
+            let gx = (world_x - min_x) as f32 * godot_scale;
+            let gz = -((world_z - min_z) as f32) * godot_scale;
 
             let transform = crate::scene_writer::tscn_writer::translation_transform(gx, ground_y, gz);
 
@@ -169,8 +170,9 @@ impl ChunkGrid {
         y_rotation: f32,
     ) {
         if let Some(coord) = self.chunk_for(world_x, world_z) {
-            let gx = world_x as f32 * godot_scale;
-            let gz = -(world_z as f32) * godot_scale;
+            let (min_x, min_z, _, _) = self.chunks[&coord].world_bounds;
+            let gx = (world_x - min_x) as f32 * godot_scale;
+            let gz = -((world_z - min_z) as f32) * godot_scale;
 
             if let Some(chunk) = self.chunks.get_mut(&coord) {
                 // Check if we already have an Instance for this name/material combo
@@ -195,5 +197,42 @@ impl ChunkGrid {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coordinate_system::cartesian::XZBBox;
+
+    fn unit_mesh() -> MeshData {
+        let mut mesh = MeshData::new();
+        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
+        mesh
+    }
+
+    #[test]
+    fn mesh_transform_is_local_to_its_chunk() {
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let mut grid = ChunkGrid::new(&bbox, 256);
+
+        grid.add_mesh_element(
+            "Test".to_string(),
+            unit_mesh(),
+            MaterialType::BuildingWall,
+            300,
+            300,
+            0.5,
+            7.0,
+        );
+
+        let chunk = &grid.chunks[&ChunkCoord(1, 1)];
+        let SceneElement::Mesh { transform, .. } = &chunk.elements[0] else {
+            panic!("expected mesh element");
+        };
+
+        assert_eq!(transform[9], 22.0);
+        assert_eq!(transform[10], 7.0);
+        assert_eq!(transform[11], -22.0);
     }
 }

@@ -1,7 +1,7 @@
-//! Generates Godot .tscn (text scene) files using built-in mesh primitives.
+//! Godot .tscn generation.
 //!
-//! Instead of embedding raw ArrayMesh binary data (fragile across Godot versions),
-//! we use BoxMesh / CylinderMesh / PlaneMesh which are simple parameterized primitives.
+//! Uses Godot built-in primitives (BoxMesh, CylinderMesh, PlaneMesh) —
+//! no ArrayMesh binary data, fully compatible with Godot 4.x.
 
 use crate::scene_writer::chunk_grid::{Chunk, SceneElement};
 use crate::scene_writer::tres_writer::MaterialType;
@@ -10,7 +10,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// Write a single chunk scene.
 pub fn write_chunk_scene(
     chunk: &Chunk,
     scenes_dir: &Path,
@@ -20,7 +19,6 @@ pub fn write_chunk_scene(
     let path = scenes_dir.join(&filename);
     let mut f = fs::File::create(&path)?;
 
-    // Count load steps
     let ext_count = material_ids.len();
     let sub_count = chunk.elements.len() as u32;
     let load_steps = ext_count as u32 + sub_count;
@@ -29,33 +27,51 @@ pub fn write_chunk_scene(
     writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://{chunk_uid}\"]")?;
     writeln!(f)?;
 
-    // External resources (materials)
     let mut mat_ext_ids: HashMap<MaterialType, u32> = HashMap::new();
-    for (mat_type, &ext_id) in material_ids {
-        let path_str = format!("res://materials/{}.tres", mat_type.file_stem());
-        writeln!(f, "[ext_resource type=\"Material\" path=\"{path_str}\" id=\"{ext_id}\"]")?;
-        mat_ext_ids.insert(*mat_type, ext_id);
+    for (mt, &eid) in material_ids {
+        writeln!(f, "[ext_resource type=\"Material\" path=\"res://materials/{}.tres\" id=\"{eid}\"]", mt.file_stem())?;
+        mat_ext_ids.insert(*mt, eid);
     }
     if !material_ids.is_empty() { writeln!(f)?; }
 
-    // Sub-resources — one mesh per element
     let mut sub_id = 1u32;
-    let mut elem_to_mesh: Vec<(usize, u32, &str)> = Vec::new(); // (elem_idx, sub_id, mesh_type)
+    let mut mesh_entries: Vec<(usize, u32)> = Vec::new();
 
     for (i, elem) in chunk.elements.iter().enumerate() {
-        let res_name = format!("elem_{i}_mesh");
-        match elem {
-            SceneElement::Mesh { name, mesh_data, .. } => {
-                let (mesh_type, dims) = classify_mesh(name, mesh_data);
-                write_mesh_sub(&mut f, sub_id, &res_name, mesh_type, dims)?;
-                elem_to_mesh.push((i, sub_id, mesh_type));
-            }
-            SceneElement::Instance { name, mesh_data, .. } => {
-                let (mesh_type, dims) = classify_mesh(name, mesh_data);
-                write_mesh_sub(&mut f, sub_id, &res_name, mesh_type, dims)?;
-                elem_to_mesh.push((i, sub_id, mesh_type));
-            }
+        let (mesh_data, name) = match elem {
+            SceneElement::Mesh { name, mesh_data, .. } => (mesh_data, name),
+            SceneElement::Instance { name, mesh_data, .. } => (mesh_data, name),
+        };
+        let res_name = format!("m{:03}", i);
+        let (w, h, d) = aabb_dims(mesh_data);
+
+        if name.starts_with("Tree_") {
+            let r = (w.max(d) * 0.45).max(0.1).min(2.0);
+            writeln!(f, "[sub_resource type=\"CylinderMesh\" id=\"{sub_id}\"]")?;
+            writeln!(f, "resource_name = \"{res_name}\"")?;
+            writeln!(f, "height = {:.2}", h.max(1.0))?;
+            writeln!(f, "top_radius = {:.2}", if h > 4.0 { 0.0 } else { r })?; // cone if tall
+            writeln!(f, "bottom_radius = {r:.2}")?;
+        } else if name.starts_with("Terrain_") {
+            writeln!(f, "[sub_resource type=\"PlaneMesh\" id=\"{sub_id}\"]")?;
+            writeln!(f, "resource_name = \"{res_name}\"")?;
+            writeln!(f, "size = Vector2({:.2}, {:.2})", w.max(0.5), d.max(0.5))?;
+        } else if name.starts_with("Water_") || name.starts_with("Waterway_") {
+            writeln!(f, "[sub_resource type=\"PlaneMesh\" id=\"{sub_id}\"]")?;
+            writeln!(f, "resource_name = \"{res_name}\"")?;
+            writeln!(f, "size = Vector2({:.2}, {:.2})", w.max(0.5), d.max(0.5))?;
+        } else if name.starts_with("Highway_") || name.starts_with("Railway_") {
+            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{sub_id}\"]")?;
+            writeln!(f, "resource_name = \"{res_name}\"")?;
+            writeln!(f, "size = Vector3({:.2}, 0.15, {:.2})", w.max(0.3), d.max(0.3))?;
+        } else {
+            // Building wall or roof — BoxMesh with AABB dimensions
+            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{sub_id}\"]")?;
+            writeln!(f, "resource_name = \"{res_name}\"")?;
+            writeln!(f, "size = Vector3({:.2}, {:.2}, {:.2})", w.max(0.3), h.max(0.5), d.max(0.3))?;
         }
+        writeln!(f)?;
+        mesh_entries.push((i, sub_id));
         sub_id += 1;
     }
 
@@ -64,28 +80,25 @@ pub fn write_chunk_scene(
     writeln!(f, "[node name=\"{root_name}\" type=\"Node3D\"]")?;
     writeln!(f)?;
 
-    // Child nodes
-    for (elem_idx, mesh_sub_id, _mesh_type) in &elem_to_mesh {
+    for (elem_idx, mid) in &mesh_entries {
         let elem = &chunk.elements[*elem_idx];
         match elem {
             SceneElement::Mesh { name, material_type, transform, .. } => {
-                let node_name = sanitize_name(name);
-                writeln!(f, "[node name=\"{node_name}\" type=\"MeshInstance3D\" parent=\"{root_name}\"]")?;
-                write_transform3d(&mut f, *transform)?;
-                writeln!(f, "mesh = SubResource(\"{mesh_sub_id}\")")?;
-                if let Some(&ext_id) = mat_ext_ids.get(material_type) {
-                    writeln!(f, "surface_material_override/0 = ExtResource(\"{ext_id}\")")?;
+                writeln!(f, "[node name=\"{}\" type=\"MeshInstance3D\" parent=\".\"]", safe_name(name))?;
+                write_xform(&mut f, *transform)?;
+                writeln!(f, "mesh = SubResource(\"{mid}\")")?;
+                if let Some(&eid) = mat_ext_ids.get(material_type) {
+                    writeln!(f, "surface_material_override/0 = ExtResource(\"{eid}\")")?;
                 }
                 writeln!(f)?;
             }
             SceneElement::Instance { name, material_type, positions, .. } => {
                 for (pi, (pos, rot)) in positions.iter().enumerate() {
-                    let node_name = format!("{}_{}", sanitize_name(name), pi);
-                    writeln!(f, "[node name=\"{node_name}\" type=\"MeshInstance3D\" parent=\"{root_name}\"]")?;
-                    write_transform3d_from_pos_rot(&mut f, *pos, *rot)?;
-                    writeln!(f, "mesh = SubResource(\"{mesh_sub_id}\")")?;
-                    if let Some(&ext_id) = mat_ext_ids.get(material_type) {
-                        writeln!(f, "surface_material_override/0 = ExtResource(\"{ext_id}\")")?;
+                    writeln!(f, "[node name=\"{}_{}\" type=\"MeshInstance3D\" parent=\".\"]", safe_name(name), pi)?;
+                    write_xform_pr(&mut f, *pos, *rot)?;
+                    writeln!(f, "mesh = SubResource(\"{mid}\")")?;
+                    if let Some(&eid) = mat_ext_ids.get(material_type) {
+                        writeln!(f, "surface_material_override/0 = ExtResource(\"{eid}\")")?;
                     }
                     writeln!(f)?;
                 }
@@ -96,97 +109,20 @@ pub fn write_chunk_scene(
     Ok(())
 }
 
-// ─── Mesh type classification ──────────────────────────────────────────────
-
-type MeshDims = (f32, f32, f32); // (width, height, depth) or (radius, height, _)
-
-#[derive(Copy, Clone)]
-enum GodotMesh {
-    Box,
-    Cylinder,
-    Plane,
+fn aabb_dims(m: &crate::scene_writer::geometry::MeshData) -> (f32, f32, f32) {
+    let v = &m.vertices;
+    if v.is_empty() { return (1.0, 1.0, 1.0); }
+    let (mut mx, mut my, mut mz) = (f32::MAX, f32::MAX, f32::MAX);
+    let (mut Mx, mut My, mut Mz) = (f32::MIN, f32::MIN, f32::MIN);
+    for i in (0..v.len()).step_by(3) {
+        mx = mx.min(v[i]); Mx = Mx.max(v[i]);
+        my = my.min(v[i+1]); My = My.max(v[i+1]);
+        mz = mz.min(v[i+2]); Mz = Mz.max(v[i+2]);
+    }
+    (Mx - mx, My - my, Mz - mz)
 }
 
-fn classify_mesh(name: &str, mesh_data: &crate::scene_writer::geometry::MeshData) -> (&'static str, MeshDims) {
-    let (w, h, d) = aabb_dims(mesh_data);
-
-    if name.starts_with("Tree_") {
-        if h > w * 1.5 {
-            ("cylinder", (w.max(d) * 0.5, h, 0.0)) // trunk
-        } else {
-            ("cylinder", (w.max(d) * 0.5, h, 0.0)) // canopy (cone approximated)
-        }
-    } else if name.starts_with("Terrain_") {
-        ("plane", (w, 0.0, d))
-    } else if name.starts_with("Water_") || name.starts_with("Waterway_") {
-        ("plane", (w, 0.0, d))
-    } else if name.starts_with("Highway_") || name.starts_with("Railway_") {
-        ("box", (w, 0.1, d)) // thin road
-    } else {
-        // Buildings → box
-        ("box", (w.max(0.5), h.max(2.0), d.max(0.5)))
-    }
-}
-
-fn aabb_dims(mesh_data: &crate::scene_writer::geometry::MeshData) -> (f32, f32, f32) {
-    let verts = &mesh_data.vertices;
-    if verts.is_empty() {
-        return (1.0, 1.0, 1.0);
-    }
-    let mut min = (f32::MAX, f32::MAX, f32::MAX);
-    let mut max = (f32::MIN, f32::MIN, f32::MIN);
-    for i in (0..verts.len()).step_by(3) {
-        min.0 = min.0.min(verts[i]);
-        min.1 = min.1.min(verts[i + 1]);
-        min.2 = min.2.min(verts[i + 2]);
-        max.0 = max.0.max(verts[i]);
-        max.1 = max.1.max(verts[i + 1]);
-        max.2 = max.2.max(verts[i + 2]);
-    }
-    (max.0 - min.0, max.1 - min.1, max.2 - min.2)
-}
-
-fn write_mesh_sub(
-    f: &mut fs::File,
-    id: u32,
-    res_name: &str,
-    mesh_type: &str,
-    dims: MeshDims,
-) -> io::Result<()> {
-    match mesh_type {
-        "box" => {
-            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector3({:.2}, {:.2}, {:.2})", dims.0, dims.1, dims.2)?;
-        }
-        "cylinder" => {
-            let radius = dims.0;
-            let height = dims.1;
-            let top_r = if dims.2 > 0.0 { 0.0 } else { radius }; // 0=cone
-            writeln!(f, "[sub_resource type=\"CylinderMesh\" id=\"{id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "height = {height:.2}")?;
-            writeln!(f, "top_radius = {top_r:.2}")?;
-            writeln!(f, "bottom_radius = {radius:.2}")?;
-        }
-        "plane" => {
-            writeln!(f, "[sub_resource type=\"PlaneMesh\" id=\"{id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector2({:.2}, {:.2})", dims.0.max(0.1), dims.2.max(0.1))?;
-        }
-        _ => {
-            writeln!(f, "[sub_resource type=\"BoxMesh\" id=\"{id}\"]")?;
-            writeln!(f, "resource_name = \"{res_name}\"")?;
-            writeln!(f, "size = Vector3({:.2}, {:.2}, {:.2})", 1.0, 1.0, 1.0)?;
-        }
-    }
-    writeln!(f)?;
-    Ok(())
-}
-
-// ─── Math ───────────────────────────────────────────────────────────────────
-
-fn write_transform3d(f: &mut fs::File, m: [f32; 12]) -> io::Result<()> {
+fn write_xform(f: &mut fs::File, m: [f32; 12]) -> io::Result<()> {
     write!(f, "transform = Transform3D(")?;
     for (i, v) in m.iter().enumerate() {
         if i > 0 { write!(f, ", ")?; }
@@ -196,13 +132,9 @@ fn write_transform3d(f: &mut fs::File, m: [f32; 12]) -> io::Result<()> {
     writeln!(f, ")")
 }
 
-fn write_transform3d_from_pos_rot(f: &mut fs::File, pos: (f32, f32, f32), y_rot: f32) -> io::Result<()> {
+fn write_xform_pr(f: &mut fs::File, pos: (f32, f32, f32), y_rot: f32) -> io::Result<()> {
     let (s, c) = y_rot.sin_cos();
-    write_transform3d(f, [c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c, pos.0, pos.1, pos.2])
-}
-
-pub fn identity_transform() -> [f32; 12] {
-    [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    write_xform(f, [c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c, pos.0, pos.1, pos.2])
 }
 
 pub fn translation_transform(x: f32, y: f32, z: f32) -> [f32; 12] {
@@ -214,6 +146,39 @@ fn chunk_uid(cx: i32, cz: i32) -> String {
     format!("c{h:013x}")
 }
 
-fn sanitize_name(s: &str) -> String {
+fn safe_name(s: &str) -> String {
     s.chars().map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene_writer::chunk_grid::{Chunk, ChunkCoord, SceneElement};
+    use crate::scene_writer::geometry::MeshData;
+
+    #[test]
+    fn chunk_scene_attaches_meshes_to_scene_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut material_ids = HashMap::new();
+        material_ids.insert(MaterialType::BuildingWall, 1);
+
+        let mut mesh = MeshData::new();
+        mesh.vertices.extend_from_slice(&[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        let chunk = Chunk {
+            coord: ChunkCoord(0, 0),
+            world_bounds: (0, 0, 255, 255),
+            elements: vec![SceneElement::Mesh {
+                name: "BuildingWall_1".to_string(),
+                mesh_data: mesh,
+                material_type: MaterialType::BuildingWall,
+                transform: translation_transform(1.0, 0.0, -1.0),
+            }],
+        };
+
+        write_chunk_scene(&chunk, tmp.path(), &material_ids).unwrap();
+
+        let scene = std::fs::read_to_string(tmp.path().join("Chunk_0_0.tscn")).unwrap();
+        assert!(scene.contains("[node name=\"BuildingWall_1\" type=\"MeshInstance3D\" parent=\".\"]"));
+        assert!(!scene.contains("parent=\"Chunk_0_0\""));
+    }
 }

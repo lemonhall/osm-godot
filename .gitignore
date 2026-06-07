@@ -8,6 +8,7 @@ release/
 
 # Generated output directories
 test_output/
+munich_town/
 output/
 *.log
 

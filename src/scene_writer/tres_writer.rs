@@ -41,8 +41,8 @@ impl MaterialType {
     /// Albedo color as (r, g, b, a) in 0.0–1.0 range.
     pub fn albedo(&self) -> (f32, f32, f32, f32) {
         match self {
-            MaterialType::BuildingWall => (0.85, 0.82, 0.75, 1.0),
-            MaterialType::BuildingRoof => (0.35, 0.18, 0.10, 1.0),
+            MaterialType::BuildingWall => (0.62, 0.58, 0.50, 1.0),
+            MaterialType::BuildingRoof => (0.42, 0.12, 0.08, 1.0),
             MaterialType::RoadAsphalt => (0.15, 0.15, 0.15, 1.0),
             MaterialType::RoadSidewalk => (0.65, 0.65, 0.65, 1.0),
             MaterialType::TerrainGrass => (0.25, 0.55, 0.15, 1.0),
@@ -141,4 +141,18 @@ fn material_uid(mat: MaterialType) -> String {
         h.wrapping_mul(31).wrapping_add(b as u64)
     });
     format!("c{hash:013x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn building_materials_are_not_whitebox_defaults() {
+        let wall = MaterialType::BuildingWall.albedo();
+        let roof = MaterialType::BuildingRoof.albedo();
+
+        assert!(wall.0 < 0.75 && wall.1 < 0.75 && wall.2 < 0.75);
+        assert_ne!(wall, roof);
+    }
 }

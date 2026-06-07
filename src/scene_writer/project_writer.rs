@@ -18,14 +18,16 @@ pub fn write_project_file(output_dir: &Path, project_name: &str) -> io::Result<(
     writeln!(f, "[application]")?;
     writeln!(f)?;
     writeln!(f, "config/name=\"{project_name}\"")?;
-    writeln!(f, "config/features=PackedStringArray(\"4.3\", \"Forward Plus\")")?;
+    writeln!(f, "run/main_scene=\"res://scenes/master.tscn\"")?;
+    writeln!(f, "config/features=PackedStringArray(\"4.6\", \"Forward Plus\")")?;
     writeln!(f, "config/icon=\"res://icon.svg\"")?;
     writeln!(f)?;
-    writeln!(f, "run/main_scene=\"res://scenes/master.tscn\"")?;
+    writeln!(f, "[animation]")?;
+    writeln!(f)?;
+    writeln!(f, "compatibility/default_parent_skeleton_in_mesh_instance_3d=true")?;
     writeln!(f)?;
     writeln!(f, "[rendering]")?;
     writeln!(f)?;
-    writeln!(f, "renderer/rendering_method=\"forward_plus\"")?;
     writeln!(f, "environment/defaults/default_environment=\"res://default_environment.tres\"")?;
     writeln!(f)?;
     writeln!(f, "[editor_plugins]")?;
@@ -71,4 +73,20 @@ pub fn write_metadata(
     });
     fs::write(&path, serde_json::to_string_pretty(&contents)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_file_targets_godot_46_without_migration_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_project_file(tmp.path(), "Test World").unwrap();
+
+        let project = std::fs::read_to_string(tmp.path().join("project.godot")).unwrap();
+        assert!(project.contains("config/features=PackedStringArray(\"4.6\", \"Forward Plus\")"));
+        assert!(!project.contains("\"4.3\""));
+    }
 }

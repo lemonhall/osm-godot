@@ -162,7 +162,7 @@ impl SceneWriter {
         Ok(())
     }
 
-    /// Generate the master.tscn that references all chunk scenes.
+    /// Generate master.tscn — chunk loader with Camera + Light for Run mode.
     fn write_master_scene(&self, scenes_dir: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
@@ -176,47 +176,77 @@ impl SceneWriter {
             .filter(|c| !self.chunk_grid.chunks[c].elements.is_empty())
             .collect();
 
+        // load_steps = N ext_resources + 1 Environment sub_resource
         let load_steps = non_empty.len() as u32 + 1;
-        writeln!(
-            f,
-            "[gd_scene load_steps={} format=3 uid=\"uid://master000001\"]",
-            load_steps
-        )?;
+        writeln!(f, "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]")?;
         writeln!(f)?;
 
-        // External resources for each chunk scene
-        let mut chunk_ext_ids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
+        // Ext resources: each chunk PackedScene
+        let mut chunk_eids: HashMap<chunk_grid::ChunkCoord, u32> = HashMap::new();
         for (i, coord) in non_empty.iter().enumerate() {
-            let ext_id = (i + 1) as u32;
-            let chunk_path = format!("res://scenes/Chunk_{}_{}.tscn", coord.0, coord.1);
-            writeln!(
-                f,
-                "[ext_resource type=\"PackedScene\" path=\"{}\" id=\"{ext_id}\"]",
-                chunk_path
-            )?;
-            chunk_ext_ids.insert(*coord, ext_id);
+            let eid = (i + 1) as u32;
+            writeln!(f, "[ext_resource type=\"PackedScene\" path=\"res://scenes/Chunk_{}_{}.tscn\" id=\"{eid}\"]", coord.0, coord.1)?;
+            chunk_eids.insert(*coord, eid);
         }
         writeln!(f)?;
 
-        // Root node
+        // Environment
+        writeln!(f, "[sub_resource type=\"Environment\" id=\"1\"]")?;
+        writeln!(f, "background_mode = 0")?; // Clear color
+        writeln!(f, "background_color = Color(0.45, 0.55, 0.70, 1)")?;
+        writeln!(f, "ambient_light_color = Color(0.4, 0.4, 0.45, 1)")?;
+        writeln!(f, "ambient_light_energy = 0.6")?;
+        writeln!(f, "ambient_source = 3")?; // Color + Sky
+        writeln!(f)?;
+
+        // Root
         writeln!(f, "[node name=\"World\" type=\"Node3D\"]")?;
         writeln!(f)?;
 
-        // Instance each chunk
+        // WorldEnvironment
+        writeln!(f, "[node name=\"WorldEnvironment\" type=\"WorldEnvironment\" parent=\".\"]")?;
+        writeln!(f, "environment = SubResource(\"1\")")?;
+        writeln!(f)?;
+
+        // DirectionalLight (sun)
+        writeln!(f, "[node name=\"Sun\" type=\"DirectionalLight3D\" parent=\".\"]")?;
+        writeln!(f, "transform = Transform3D(0.707, 0.408, -0.577, 0, 0.816, 0.577, 0.707, -0.408, 0.577, 0, 0, 0)")?;
+        writeln!(f, "shadow_enabled = true")?;
+        writeln!(f)?;
+
+        // Camera3D
+        let world_cx = (self.chunk_grid.xzbbox.min_x() + self.chunk_grid.xzbbox.max_x()) as f32 * 0.5 * self.godot_scale;
+        let world_cz = -(self.chunk_grid.xzbbox.min_z() + self.chunk_grid.xzbbox.max_z()) as f32 * 0.5 * self.godot_scale;
+        let span_x = (self.chunk_grid.xzbbox.max_x() - self.chunk_grid.xzbbox.min_x()).abs() as f32 * self.godot_scale;
+        let span_z = (self.chunk_grid.xzbbox.max_z() - self.chunk_grid.xzbbox.min_z()).abs() as f32 * self.godot_scale;
+        let span = span_x.max(span_z).max(1.0);
+        let cam_y = (span * 0.75).clamp(80.0, 600.0);
+        let cam_z = world_cz + (span * 0.85).clamp(60.0, 500.0);
+        let camera = look_at_transform(
+            (world_cx, cam_y, cam_z),
+            (world_cx, 0.0, world_cz),
+        );
+        writeln!(f, "[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]")?;
+        write_transform3d(&mut f, camera)?;
+        writeln!(f, "current = true")?;
+        writeln!(f, "far = 10000.0")?;
+        writeln!(f)?;
+
+        // Chunk instances
+        let chunks_group = "Chunks";
+        writeln!(f, "[node name=\"{chunks_group}\" type=\"Node3D\" parent=\".\"]")?;
+        writeln!(f)?;
+
         for coord in &non_empty {
-            let ext_id = chunk_ext_ids[coord];
-            let chunk_name = format!("Chunk_{}_{}", coord.0, coord.1);
+            let eid = chunk_eids[coord];
+            let cname = format!("Chunk_{}_{}", coord.0, coord.1);
             let chunk = &self.chunk_grid.chunks[coord];
             let (min_x, min_z, _, _) = chunk.world_bounds;
             let gx = min_x as f32 * self.godot_scale;
             let gz = -(min_z as f32) * self.godot_scale;
-
-            writeln!(
-                f,
-                "[node name=\"{chunk_name}\" type=\"Node3D\" parent=\"World\"]"
-            )?;
+            writeln!(f, "[node name=\"{cname}\" type=\"Node3D\" parent=\"{chunks_group}\"]")?;
             writeln!(f, "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, {gx}, 0, {gz})")?;
-            writeln!(f, "instance = ExtResource(\"{ext_id}\")")?;
+            writeln!(f, "instance = ExtResource(\"{eid}\")")?;
             writeln!(f)?;
         }
 
@@ -235,5 +265,91 @@ impl SceneWriter {
             .values()
             .map(|c| c.elements.len())
             .sum()
+    }
+}
+
+fn look_at_transform(eye: (f32, f32, f32), target: (f32, f32, f32)) -> [f32; 12] {
+    let forward = normalize((target.0 - eye.0, target.1 - eye.1, target.2 - eye.2));
+    let up = (0.0, 1.0, 0.0);
+    let right = normalize(cross(forward, up));
+    let camera_up = cross(right, forward);
+    let back = (-forward.0, -forward.1, -forward.2);
+
+    [
+        right.0, right.1, right.2,
+        camera_up.0, camera_up.1, camera_up.2,
+        back.0, back.1, back.2,
+        eye.0, eye.1, eye.2,
+    ]
+}
+
+fn normalize(v: (f32, f32, f32)) -> (f32, f32, f32) {
+    let len = (v.0 * v.0 + v.1 * v.1 + v.2 * v.2).sqrt();
+    if len <= f32::EPSILON {
+        (0.0, 0.0, 1.0)
+    } else {
+        (v.0 / len, v.1 / len, v.2 / len)
+    }
+}
+
+fn cross(a: (f32, f32, f32), b: (f32, f32, f32)) -> (f32, f32, f32) {
+    (
+        a.1 * b.2 - a.2 * b.1,
+        a.2 * b.0 - a.0 * b.2,
+        a.0 * b.1 - a.1 * b.0,
+    )
+}
+
+fn write_transform3d(f: &mut std::fs::File, m: [f32; 12]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    write!(f, "transform = Transform3D(")?;
+    for (i, v) in m.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        if v.fract() == 0.0 {
+            write!(f, "{}", *v as i32)?;
+        } else {
+            write!(f, "{v:.4}")?;
+        }
+    }
+    writeln!(f, ")")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coordinate_system::cartesian::XZBBox;
+    use crate::ground::Ground;
+
+    #[test]
+    fn master_scene_has_current_camera_for_run_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
+        assert!(master.contains("current = true"));
+        assert!(!master.contains("Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 127.8, 150.0, -127.8)"));
+    }
+
+    #[test]
+    fn master_scene_attaches_direct_children_to_scene_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master = std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains("[node name=\"Camera3D\" type=\"Camera3D\" parent=\".\"]"));
+        assert!(master.contains("[node name=\"Chunks\" type=\"Node3D\" parent=\".\"]"));
+        assert!(!master.contains("parent=\"World\""));
     }
 }
