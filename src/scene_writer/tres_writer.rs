@@ -8,7 +8,20 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialType {
     BuildingWall,
+    BuildingWallBrick,
+    BuildingWallConcrete,
+    BuildingWallCommercial,
+    BuildingWallGlass,
+    BuildingWallGreenhouse,
+    BuildingWallStone,
     BuildingRoof,
+    BuildingRoofDark,
+    BuildingRoofTile,
+    BuildingRoofMetal,
+    BuildingWindow,
+    BuildingDoor,
+    BuildingTrim,
+    RooftopEquipment,
     RoadAsphalt,
     RoadSidewalk,
     TerrainGrass,
@@ -25,7 +38,20 @@ impl MaterialType {
     pub fn file_stem(&self) -> &'static str {
         match self {
             MaterialType::BuildingWall => "building_wall",
+            MaterialType::BuildingWallBrick => "building_wall_brick",
+            MaterialType::BuildingWallConcrete => "building_wall_concrete",
+            MaterialType::BuildingWallCommercial => "building_wall_commercial",
+            MaterialType::BuildingWallGlass => "building_wall_glass",
+            MaterialType::BuildingWallGreenhouse => "building_wall_greenhouse",
+            MaterialType::BuildingWallStone => "building_wall_stone",
             MaterialType::BuildingRoof => "building_roof",
+            MaterialType::BuildingRoofDark => "building_roof_dark",
+            MaterialType::BuildingRoofTile => "building_roof_tile",
+            MaterialType::BuildingRoofMetal => "building_roof_metal",
+            MaterialType::BuildingWindow => "building_window",
+            MaterialType::BuildingDoor => "building_door",
+            MaterialType::BuildingTrim => "building_trim",
+            MaterialType::RooftopEquipment => "rooftop_equipment",
             MaterialType::RoadAsphalt => "road_asphalt",
             MaterialType::RoadSidewalk => "road_sidewalk",
             MaterialType::TerrainGrass => "terrain_grass",
@@ -42,7 +68,20 @@ impl MaterialType {
     pub fn albedo(&self) -> (f32, f32, f32, f32) {
         match self {
             MaterialType::BuildingWall => (0.62, 0.58, 0.50, 1.0),
+            MaterialType::BuildingWallBrick => (0.58, 0.31, 0.24, 1.0),
+            MaterialType::BuildingWallConcrete => (0.54, 0.55, 0.52, 1.0),
+            MaterialType::BuildingWallCommercial => (0.42, 0.46, 0.47, 1.0),
+            MaterialType::BuildingWallGlass => (0.18, 0.31, 0.38, 1.0),
+            MaterialType::BuildingWallGreenhouse => (0.62, 0.86, 0.78, 1.0),
+            MaterialType::BuildingWallStone => (0.39, 0.38, 0.35, 1.0),
             MaterialType::BuildingRoof => (0.42, 0.12, 0.08, 1.0),
+            MaterialType::BuildingRoofDark => (0.11, 0.12, 0.13, 1.0),
+            MaterialType::BuildingRoofTile => (0.52, 0.16, 0.10, 1.0),
+            MaterialType::BuildingRoofMetal => (0.36, 0.39, 0.40, 1.0),
+            MaterialType::BuildingWindow => (0.12, 0.22, 0.30, 1.0),
+            MaterialType::BuildingDoor => (0.28, 0.16, 0.08, 1.0),
+            MaterialType::BuildingTrim => (0.78, 0.74, 0.65, 1.0),
+            MaterialType::RooftopEquipment => (0.30, 0.32, 0.33, 1.0),
             MaterialType::RoadAsphalt => (0.15, 0.15, 0.15, 1.0),
             MaterialType::RoadSidewalk => (0.65, 0.65, 0.65, 1.0),
             MaterialType::TerrainGrass => (0.25, 0.55, 0.15, 1.0),
@@ -58,8 +97,21 @@ impl MaterialType {
     /// Roughness value.
     pub fn roughness(&self) -> f32 {
         match self {
-            MaterialType::BuildingWall => 0.85,
-            MaterialType::BuildingRoof => 0.70,
+            MaterialType::BuildingWall
+            | MaterialType::BuildingWallBrick
+            | MaterialType::BuildingWallConcrete
+            | MaterialType::BuildingWallCommercial
+            | MaterialType::BuildingWallStone => 0.85,
+            MaterialType::BuildingWallGlass
+            | MaterialType::BuildingWallGreenhouse
+            | MaterialType::BuildingWindow => 0.18,
+            MaterialType::BuildingRoof
+            | MaterialType::BuildingRoofDark
+            | MaterialType::BuildingRoofTile
+            | MaterialType::BuildingRoofMetal => 0.70,
+            MaterialType::BuildingDoor => 0.75,
+            MaterialType::BuildingTrim => 0.80,
+            MaterialType::RooftopEquipment => 0.65,
             MaterialType::RoadAsphalt => 0.90,
             MaterialType::RoadSidewalk => 0.80,
             MaterialType::TerrainGrass => 0.95,
@@ -76,6 +128,9 @@ impl MaterialType {
     pub fn metallic(&self) -> f32 {
         match self {
             MaterialType::Water => 0.1,
+            MaterialType::BuildingWallGlass
+            | MaterialType::BuildingWallGreenhouse
+            | MaterialType::BuildingWindow => 0.0,
             _ => 0.0,
         }
     }
@@ -84,7 +139,20 @@ impl MaterialType {
 /// All material types defined.
 pub const ALL_MATERIALS: &[MaterialType] = &[
     MaterialType::BuildingWall,
+    MaterialType::BuildingWallBrick,
+    MaterialType::BuildingWallConcrete,
+    MaterialType::BuildingWallCommercial,
+    MaterialType::BuildingWallGlass,
+    MaterialType::BuildingWallGreenhouse,
+    MaterialType::BuildingWallStone,
     MaterialType::BuildingRoof,
+    MaterialType::BuildingRoofDark,
+    MaterialType::BuildingRoofTile,
+    MaterialType::BuildingRoofMetal,
+    MaterialType::BuildingWindow,
+    MaterialType::BuildingDoor,
+    MaterialType::BuildingTrim,
+    MaterialType::RooftopEquipment,
     MaterialType::RoadAsphalt,
     MaterialType::RoadSidewalk,
     MaterialType::TerrainGrass,
@@ -106,7 +174,11 @@ pub fn write_material(mat_type: MaterialType, materials_dir: &Path) -> io::Resul
 
     let mut f = fs::File::create(&path)?;
 
-    writeln!(f, "[gd_resource type=\"StandardMaterial3D\" load_steps=0 format=3 uid=\"uid://{}\"]", material_uid(mat_type))?;
+    writeln!(
+        f,
+        "[gd_resource type=\"StandardMaterial3D\" load_steps=0 format=3 uid=\"uid://{}\"]",
+        material_uid(mat_type)
+    )?;
     writeln!(f)?;
     writeln!(f, "[resource]")?;
     writeln!(f, "albedo_color = Color({}, {}, {}, {})", r, g, b, a)?;
@@ -137,9 +209,10 @@ pub fn write_all_materials(materials_dir: &Path) -> io::Result<Vec<(MaterialType
 /// Generate a stable uid string for a material.
 fn material_uid(mat: MaterialType) -> String {
     // Simple stable UID — Godot 4 format
-    let hash = mat.file_stem().bytes().fold(0u64, |h, b| {
-        h.wrapping_mul(31).wrapping_add(b as u64)
-    });
+    let hash = mat
+        .file_stem()
+        .bytes()
+        .fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
     format!("c{hash:013x}")
 }
 

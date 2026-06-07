@@ -88,10 +88,7 @@ pub fn process_elements(
     println!("  Highways:  {}", highway_count);
     println!("  Trees:     {}", tree_count);
     println!("  Water:     {}", water_count);
-    println!(
-        "  Total scene elements: {}",
-        scene.element_count()
-    );
+    println!("  Total scene elements: {}", scene.element_count());
     println!("  Chunks:    {}", scene.chunk_count());
 
     Ok(scene)
@@ -113,10 +110,30 @@ mod tests {
             id: 42,
             tags,
             nodes: vec![
-                ProcessedNode { id: 1, tags: HashMap::new(), x: 0, z: 0 },
-                ProcessedNode { id: 2, tags: HashMap::new(), x: 10, z: 0 },
-                ProcessedNode { id: 3, tags: HashMap::new(), x: 10, z: 10 },
-                ProcessedNode { id: 4, tags: HashMap::new(), x: 0, z: 10 },
+                ProcessedNode {
+                    id: 1,
+                    tags: HashMap::new(),
+                    x: 0,
+                    z: 0,
+                },
+                ProcessedNode {
+                    id: 2,
+                    tags: HashMap::new(),
+                    x: 10,
+                    z: 0,
+                },
+                ProcessedNode {
+                    id: 3,
+                    tags: HashMap::new(),
+                    x: 10,
+                    z: 10,
+                },
+                ProcessedNode {
+                    id: 4,
+                    tags: HashMap::new(),
+                    x: 0,
+                    z: 10,
+                },
             ],
         };
         let bbox = XZBBox::rect_from_xz_lengths(100.0, 100.0).unwrap();
@@ -136,6 +153,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(scene.element_count(), 2);
+        // One building now emits wall, roof, windows, and door meshes. If the
+        // duplicate OSM id were processed too, this would be doubled.
+        assert_eq!(scene.element_count(), 4);
     }
 }
