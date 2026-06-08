@@ -1064,6 +1064,10 @@ func _to_transform(values: Array) -> Transform3D:
 @export var max_route_attempts := 1
 @export var auto_run_toggle_key := KEY_G
 @export var auto_run_waypoint_radius := 3.0
+@export var inspect_key := KEY_F
+@export var inspect_display_seconds := 5.0
+@export var inspect_cone_degrees := 18.0
+@export var inspect_max_distance := 160.0
 
 var player: Node3D = null
 var navigation_entries := []
@@ -1084,6 +1088,7 @@ var destination_position := Vector3.ZERO
 var guidance_update_accumulator := 0.0
 var auto_run_enabled := false
 var auto_run_target_index := 0
+var building_inspect_remaining := 0.0
 
 var hud_layer: CanvasLayer = null
 var panel: PanelContainer = null
@@ -1094,6 +1099,9 @@ var start_navigation_button: Button = null
 var instruction_label: Label = null
 var distance_label: Label = null
 var auto_run_hint_label: Label = null
+var building_inspect_panel: PanelContainer = null
+var building_inspect_title: Label = null
+var building_inspect_body: Label = null
 var route_overlay: Node3D = null
 var route_line: MeshInstance3D = null
 var destination_circle: MeshInstance3D = null
@@ -1115,10 +1123,17 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == auto_run_toggle_key:
 		if panel == null or not panel.visible:
 			_toggle_auto_run()
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == inspect_key:
+		if panel == null or not panel.visible:
+			_inspect_looked_at_building()
 	if panel != null and panel.visible and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ENTER:
 		_start_from_ui_selection()
 
 func _process(delta: float) -> void:
+	if building_inspect_remaining > 0.0:
+		building_inspect_remaining -= delta
+		if building_inspect_remaining <= 0.0:
+			_hide_building_inspection()
 	if route_waypoints.is_empty():
 		return
 	guidance_update_accumulator += delta
@@ -1614,6 +1629,118 @@ func _update_auto_run_hint() -> void:
 	else:
 		auto_run_hint_label.text = "G 自动巡航：关闭"
 
+func _inspect_looked_at_building() -> void:
+	var result := _find_looked_at_building()
+	if result.is_empty():
+		_show_building_inspection({})
+		return
+	var metadata: Dictionary = result.get("metadata", {})
+	_show_building_inspection(metadata)
+
+func _find_looked_at_building() -> Dictionary:
+	var camera := _active_camera()
+	if camera == null:
+		return {}
+	var origin := camera.global_position
+	var forward := -camera.global_transform.basis.z.normalized()
+	var min_dot := cos(deg_to_rad(inspect_cone_degrees))
+	var root := get_tree().current_scene
+	if root == null:
+		root = self
+	var stack := [root]
+	var best := {}
+	var best_score := INF
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for child in node.get_children():
+			stack.append(child)
+		if not node.has_meta("osm_metadata"):
+			continue
+		var metadata_variant: Variant = node.get_meta("osm_metadata")
+		if typeof(metadata_variant) != TYPE_DICTIONARY:
+			continue
+		var metadata: Dictionary = metadata_variant
+		if not (metadata.get("osm_kind", "") == "building" or metadata.has("building")):
+			continue
+		var spatial := node as Node3D
+		if spatial == null:
+			continue
+		var offset := spatial.global_position - origin
+		var forward_distance := offset.dot(forward)
+		if forward_distance <= 0.0 or forward_distance > inspect_max_distance:
+			continue
+		var distance := offset.length()
+		if distance <= 0.001:
+			continue
+		var alignment := forward_distance / distance
+		if alignment < min_dot:
+			continue
+		var perpendicular := sqrt(max(0.0, distance * distance - forward_distance * forward_distance))
+		var score := perpendicular * 4.0 + forward_distance * 0.01
+		if score < best_score:
+			best_score = score
+			best = {"node": spatial, "metadata": metadata, "score": score}
+	return best
+
+func _active_camera() -> Camera3D:
+	if player != null:
+		var player_camera := player.get_node_or_null("Camera3D") as Camera3D
+		if player_camera != null:
+			return player_camera
+	return get_viewport().get_camera_3d()
+
+func _show_building_inspection(metadata: Dictionary) -> void:
+	if building_inspect_panel == null:
+		return
+	if metadata.is_empty():
+		building_inspect_title.text = "未识别到建筑"
+		building_inspect_body.text = "请靠近或看向已加载建筑"
+	else:
+		building_inspect_title.text = _building_display_name(metadata)
+		building_inspect_body.text = _building_inspection_body(metadata)
+	building_inspect_remaining = inspect_display_seconds
+	building_inspect_panel.visible = true
+
+func _hide_building_inspection() -> void:
+	building_inspect_remaining = 0.0
+	if building_inspect_panel != null:
+		building_inspect_panel.visible = false
+
+func _building_display_name(metadata: Dictionary) -> String:
+	for key in ["name", "official_name", "alt_name", "old_name"]:
+		var value := str(metadata.get(key, ""))
+		if not value.is_empty():
+			return value
+	var building := str(metadata.get("building", ""))
+	if not building.is_empty():
+		return "建筑：" + building
+	return "未命名建筑"
+
+func _building_inspection_body(metadata: Dictionary) -> String:
+	var lines := []
+	for key in ["building", "amenity", "shop", "tourism", "addr:street", "addr:housenumber", "building:levels", "height", "osm_id"]:
+		var value := str(metadata.get(key, ""))
+		if value.is_empty():
+			continue
+		lines.append(_format_metadata_line(key, value))
+	if lines.is_empty():
+		return "暂无更多属性"
+	return "\n".join(lines)
+
+func _format_metadata_line(key: String, value: String) -> String:
+	var labels := {
+		"building": "建筑类型",
+		"amenity": "设施",
+		"shop": "店铺",
+		"tourism": "旅游",
+		"addr:street": "道路",
+		"addr:housenumber": "门牌",
+		"building:levels": "楼层",
+		"height": "高度",
+		"osm_id": "OSM ID",
+	}
+	return str(labels.get(key, key)) + "：" + value
+
 func _build_hud() -> void:
 	hud_layer = CanvasLayer.new()
 	hud_layer.name = "NavigationHUD"
@@ -1668,6 +1795,31 @@ func _build_hud() -> void:
 	auto_run_hint_label.text = "G 自动巡航：关闭"
 	auto_run_hint_label.visible = false
 	hud_layer.add_child(auto_run_hint_label)
+	building_inspect_panel = PanelContainer.new()
+	building_inspect_panel.name = "BuildingInspectPanel"
+	building_inspect_panel.visible = false
+	building_inspect_panel.anchor_left = 0.5
+	building_inspect_panel.anchor_top = 0.08
+	building_inspect_panel.anchor_right = 0.5
+	building_inspect_panel.anchor_bottom = 0.08
+	building_inspect_panel.offset_left = -220.0
+	building_inspect_panel.offset_top = 0.0
+	building_inspect_panel.offset_right = 220.0
+	building_inspect_panel.offset_bottom = 150.0
+	hud_layer.add_child(building_inspect_panel)
+	var inspect_box := VBoxContainer.new()
+	inspect_box.custom_minimum_size = Vector2(420, 130)
+	building_inspect_panel.add_child(inspect_box)
+	building_inspect_title = Label.new()
+	building_inspect_title.name = "BuildingInspectTitle"
+	building_inspect_title.add_theme_font_size_override("font_size", 22)
+	building_inspect_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inspect_box.add_child(building_inspect_title)
+	building_inspect_body = Label.new()
+	building_inspect_body.name = "BuildingInspectBody"
+	building_inspect_body.add_theme_font_size_override("font_size", 16)
+	building_inspect_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inspect_box.add_child(building_inspect_body)
 	search_box.text_changed.connect(_on_search_changed)
 	cancel_navigation_button.pressed.connect(_cancel_navigation_panel)
 	start_navigation_button.pressed.connect(_start_from_ui_selection)
@@ -2916,6 +3068,34 @@ mod tests {
         assert!(script.contains("player.call(\"set_auto_move\""));
         assert!(script.contains("player.call(\"get_sprint_speed\")"));
         assert!(script.contains("player.call(\"stop_auto_move\")"));
+    }
+
+    #[test]
+    fn building_inspection_controller_has_f_key_lookup_and_hud() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("@export var inspect_key := KEY_F"));
+        assert!(script.contains("@export var inspect_display_seconds := 5.0"));
+        assert!(script.contains("@export var inspect_cone_degrees := 18.0"));
+        assert!(script.contains("@export var inspect_max_distance := 160.0"));
+        assert!(script.contains("BuildingInspectPanel"));
+        assert!(script.contains("func _inspect_looked_at_building() -> void:"));
+        assert!(script.contains("func _find_looked_at_building() -> Dictionary:"));
+        assert!(script.contains("func _show_building_inspection"));
+        assert!(script.contains("func _hide_building_inspection() -> void:"));
+        assert!(script.contains("osm_metadata"));
+        assert!(script.contains("metadata.get(\"osm_kind\", \"\") == \"building\""));
+        assert!(script.contains("cos(deg_to_rad(inspect_cone_degrees))"));
+        assert!(script.contains("perpendicular"));
     }
 
     #[test]
