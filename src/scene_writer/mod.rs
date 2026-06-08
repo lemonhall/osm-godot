@@ -653,6 +653,9 @@ impl SceneWriter {
         writeln!(f, "var noclip := false")?;
         writeln!(f, "var look_enabled := true")?;
         writeln!(f, "var controls_enabled := true")?;
+        writeln!(f, "var auto_move_enabled := false")?;
+        writeln!(f, "var auto_move_direction := Vector3.ZERO")?;
+        writeln!(f, "var auto_move_speed := 0.0")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
         writeln!(
@@ -678,6 +681,7 @@ impl SceneWriter {
         writeln!(f, "\t\tlook_enabled = true")?;
         writeln!(f, "\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f, "\tif event.is_action_pressed(\"noclip_toggle\") or _is_key_pressed_once(event, KEY_V):")?;
+        writeln!(f, "\t\tstop_auto_move()")?;
         writeln!(f, "\t\tnoclip = not noclip")?;
         writeln!(f, "\t\tcollision_shape.disabled = noclip")?;
         writeln!(f, "\tif event is InputEventMouseMotion and look_enabled:")?;
@@ -696,13 +700,19 @@ impl SceneWriter {
         writeln!(f, "\t\tvelocity = Vector3.ZERO")?;
         writeln!(f, "\t\treturn")?;
         writeln!(f, "\tvar input_dir := _movement_input_vector()")?;
-        writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
+        writeln!(f, "\tvar direction := Vector3.ZERO")?;
         writeln!(f, "\tvar speed := move_speed")?;
+        writeln!(f, "\tif auto_move_enabled:")?;
+        writeln!(f, "\t\tdirection = auto_move_direction.normalized()")?;
+        writeln!(f, "\t\tspeed = auto_move_speed")?;
+        writeln!(f, "\telse:")?;
+        writeln!(f, "\t\tdirection = (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
         writeln!(
             f,
             "\tif Input.is_action_pressed(\"sprint\") or Input.is_key_pressed(KEY_SHIFT):"
         )?;
-        writeln!(f, "\t\tspeed *= sprint_multiplier")?;
+        writeln!(f, "\t\tif not auto_move_enabled:")?;
+        writeln!(f, "\t\t\tspeed *= sprint_multiplier")?;
         writeln!(f, "\tif noclip:")?;
         writeln!(
             f,
@@ -771,9 +781,27 @@ impl SceneWriter {
         writeln!(f, "\tvar key_event := event as InputEventKey")?;
         writeln!(f, "\treturn key_event.pressed and not key_event.echo and (key_event.keycode == key or key_event.physical_keycode == key)")?;
         writeln!(f)?;
+        writeln!(f, "func get_sprint_speed() -> float:")?;
+        writeln!(f, "\treturn move_speed * sprint_multiplier")?;
+        writeln!(f)?;
+        writeln!(f, "func set_auto_move(direction: Vector3, speed: float) -> void:")?;
+        writeln!(f, "\tif direction.length_squared() <= 0.0001 or speed <= 0.0:")?;
+        writeln!(f, "\t\tstop_auto_move()")?;
+        writeln!(f, "\t\treturn")?;
+        writeln!(f, "\tauto_move_direction = direction.normalized()")?;
+        writeln!(f, "\tauto_move_speed = speed")?;
+        writeln!(f, "\tauto_move_enabled = true")?;
+        writeln!(f)?;
+        writeln!(f, "func stop_auto_move() -> void:")?;
+        writeln!(f, "\tauto_move_enabled = false")?;
+        writeln!(f, "\tauto_move_direction = Vector3.ZERO")?;
+        writeln!(f, "\tauto_move_speed = 0.0")?;
+        writeln!(f)?;
         writeln!(f, "func set_controls_enabled(enabled: bool) -> void:")?;
         writeln!(f, "\tcontrols_enabled = enabled")?;
         writeln!(f, "\tlook_enabled = enabled")?;
+        writeln!(f, "\tif not enabled:")?;
+        writeln!(f, "\t\tstop_auto_move()")?;
         writeln!(f, "\tvelocity = Vector3.ZERO")?;
         writeln!(f, "\tif enabled:")?;
         writeln!(f, "\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
@@ -1034,6 +1062,8 @@ func _to_transform(values: Array) -> Transform3D:
 @export var route_ribbon_width := 2.4
 @export var arrival_radius := 5.0
 @export var max_route_attempts := 1
+@export var auto_run_toggle_key := KEY_G
+@export var auto_run_waypoint_radius := 3.0
 
 var player: Node3D = null
 var navigation_entries := []
@@ -1052,6 +1082,8 @@ var navigation_status := "idle"
 var destination_name := ""
 var destination_position := Vector3.ZERO
 var guidance_update_accumulator := 0.0
+var auto_run_enabled := false
+var auto_run_target_index := 0
 
 var hud_layer: CanvasLayer = null
 var panel: PanelContainer = null
@@ -1061,6 +1093,7 @@ var cancel_navigation_button: Button = null
 var start_navigation_button: Button = null
 var instruction_label: Label = null
 var distance_label: Label = null
+var auto_run_hint_label: Label = null
 var route_overlay: Node3D = null
 var route_line: MeshInstance3D = null
 var destination_circle: MeshInstance3D = null
@@ -1074,10 +1107,14 @@ func _ready() -> void:
 	_build_hud()
 	_build_route_overlay()
 	set_process(true)
+	set_physics_process(true)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == panel_toggle_key:
 		_toggle_panel()
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == auto_run_toggle_key:
+		if panel == null or not panel.visible:
+			_toggle_auto_run()
 	if panel != null and panel.visible and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ENTER:
 		_start_from_ui_selection()
 
@@ -1089,6 +1126,10 @@ func _process(delta: float) -> void:
 		return
 	guidance_update_accumulator = 0.0
 	_update_guidance()
+
+func _physics_process(delta: float) -> void:
+	if auto_run_enabled:
+		_update_auto_run(delta)
 
 func start_navigation_to_query(query: String) -> bool:
 	if player == null:
@@ -1247,6 +1288,8 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	route_waypoints.clear()
 	for node_index in node_path:
 		route_waypoints.append(node_positions_array[int(node_index)])
+	_set_auto_run_enabled(false)
+	auto_run_target_index = 1
 	route_total_distance = _route_distance(route_waypoints)
 	destination_name = _entry_display_name(entry)
 	destination_position = route_waypoints.back() as Vector3
@@ -1259,6 +1302,7 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	guidance_update_accumulator = guidance_update_interval
 	_draw_route_ribbon()
 	_draw_destination_circle()
+	_update_auto_run_hint()
 	_update_guidance()
 	return true
 
@@ -1456,9 +1500,12 @@ func _update_guidance() -> void:
 		_complete_navigation()
 		return
 	current_instruction = "沿绿色路线行驶"
+	if auto_run_enabled:
+		current_instruction = "自动巡航中"
 	_update_hud()
 
 func _complete_navigation() -> void:
+	_set_auto_run_enabled(false)
 	navigation_status = "arrived"
 	route_waypoints.clear()
 	route_total_distance = 0.0
@@ -1473,6 +1520,99 @@ func _complete_navigation() -> void:
 		instruction_label.visible = false
 	if distance_label != null:
 		distance_label.visible = false
+	_update_auto_run_hint()
+
+func _toggle_auto_run() -> void:
+	if route_waypoints.size() < 2:
+		return
+	_set_auto_run_enabled(not auto_run_enabled)
+
+func _set_auto_run_enabled(enabled: bool) -> void:
+	auto_run_enabled = enabled and route_waypoints.size() >= 2
+	if auto_run_enabled:
+		auto_run_target_index = clamp(_nearest_route_waypoint_index() + 1, 1, route_waypoints.size() - 1)
+		current_instruction = "自动巡航中"
+	else:
+		_stop_player_auto_move()
+		if navigation_status == "routing":
+			current_instruction = "沿绿色路线行驶"
+	_update_auto_run_hint()
+	_update_hud()
+
+func _update_auto_run(delta: float) -> void:
+	if player == null or route_waypoints.size() < 2:
+		_set_auto_run_enabled(false)
+		return
+	if panel != null and panel.visible:
+		_set_auto_run_enabled(false)
+		return
+	if _manual_movement_pressed():
+		_set_auto_run_enabled(false)
+		return
+	if player.global_position.distance_to(destination_position) <= arrival_radius:
+		_complete_navigation()
+		return
+	_advance_auto_run_target()
+	if auto_run_target_index >= route_waypoints.size():
+		_complete_navigation()
+		return
+	var target: Vector3 = route_waypoints[auto_run_target_index]
+	var delta_to_target := target - player.global_position
+	delta_to_target.y = 0.0
+	if delta_to_target.length() <= auto_run_waypoint_radius:
+		auto_run_target_index += 1
+		return
+	var direction := delta_to_target.normalized()
+	var speed := 28.0
+	if player.has_method("get_sprint_speed"):
+		speed = float(player.call("get_sprint_speed"))
+	if player.has_method("set_auto_move"):
+		player.call("set_auto_move", direction, speed)
+	player.rotation.y = atan2(-direction.x, -direction.z)
+
+func _advance_auto_run_target() -> void:
+	while auto_run_target_index < route_waypoints.size():
+		var target: Vector3 = route_waypoints[auto_run_target_index]
+		var horizontal := target - player.global_position
+		horizontal.y = 0.0
+		if horizontal.length() > auto_run_waypoint_radius:
+			break
+		auto_run_target_index += 1
+
+func _nearest_route_waypoint_index() -> int:
+	if player == null or route_waypoints.is_empty():
+		return 0
+	var best_index := 0
+	var best_dist := INF
+	for i in range(route_waypoints.size()):
+		var waypoint: Vector3 = route_waypoints[i]
+		var horizontal := waypoint - player.global_position
+		horizontal.y = 0.0
+		var dist := horizontal.length_squared()
+		if dist < best_dist:
+			best_dist = dist
+			best_index = i
+	return best_index
+
+func _manual_movement_pressed() -> bool:
+	if Input.is_action_pressed("move_left") or Input.is_action_pressed("move_right") or Input.is_action_pressed("move_forward") or Input.is_action_pressed("move_backward"):
+		return true
+	if Input.is_action_pressed("jump") or Input.is_action_pressed("noclip_toggle"):
+		return true
+	return Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_SPACE) or Input.is_key_pressed(KEY_V)
+
+func _stop_player_auto_move() -> void:
+	if player != null and player.has_method("stop_auto_move"):
+		player.call("stop_auto_move")
+
+func _update_auto_run_hint() -> void:
+	if auto_run_hint_label == null:
+		return
+	auto_run_hint_label.visible = route_waypoints.size() >= 2
+	if auto_run_enabled:
+		auto_run_hint_label.text = "G 自动巡航：开启"
+	else:
+		auto_run_hint_label.text = "G 自动巡航：关闭"
 
 func _build_hud() -> void:
 	hud_layer = CanvasLayer.new()
@@ -1521,6 +1661,13 @@ func _build_hud() -> void:
 	distance_label.name = "DistanceLabel"
 	distance_label.position = Vector2(0, 24)
 	hud_layer.add_child(distance_label)
+	auto_run_hint_label = Label.new()
+	auto_run_hint_label.name = "AutoRunHintLabel"
+	auto_run_hint_label.position = Vector2(82, 54)
+	auto_run_hint_label.add_theme_font_size_override("font_size", 18)
+	auto_run_hint_label.text = "G 自动巡航：关闭"
+	auto_run_hint_label.visible = false
+	hud_layer.add_child(auto_run_hint_label)
 	search_box.text_changed.connect(_on_search_changed)
 	cancel_navigation_button.pressed.connect(_cancel_navigation_panel)
 	start_navigation_button.pressed.connect(_start_from_ui_selection)
@@ -1565,6 +1712,7 @@ func _set_panel_visible(visible: bool) -> void:
 		return
 	panel.visible = visible
 	if visible:
+		_set_auto_run_enabled(false)
 		navigation_start_in_progress = false
 		if start_navigation_button != null:
 			start_navigation_button.disabled = false
@@ -1693,6 +1841,7 @@ func _update_hud() -> void:
 			distance_label.text = destination_name + " " + str(int(route_total_distance)) + " m"
 		else:
 			distance_label.text = navigation_status
+	_update_auto_run_hint()
 
 "#
             .as_bytes(),
@@ -2725,6 +2874,48 @@ mod tests {
         assert!(navigation_script.contains("_set_player_controls_enabled(false)"));
         assert!(navigation_script.contains("_set_player_controls_enabled(true)"));
         assert!(navigation_script.contains("player.call(\"set_controls_enabled\", enabled)"));
+    }
+
+    #[test]
+    fn fps_player_exposes_sprint_speed_auto_move_api() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let player_script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        assert!(player_script.contains("var auto_move_enabled := false"));
+        assert!(player_script.contains("func get_sprint_speed() -> float:"));
+        assert!(player_script.contains("func set_auto_move(direction: Vector3, speed: float) -> void:"));
+        assert!(player_script.contains("func stop_auto_move() -> void:"));
+        assert!(player_script.contains("stop_auto_move()"));
+    }
+
+    #[test]
+    fn navigation_controller_has_g_key_auto_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("@export var auto_run_toggle_key := KEY_G"));
+        assert!(script.contains("var auto_run_enabled := false"));
+        assert!(script.contains("func _physics_process(delta: float) -> void:"));
+        assert!(script.contains("func _toggle_auto_run() -> void:"));
+        assert!(script.contains("AutoRunHintLabel"));
+        assert!(script.contains("G 自动巡航"));
+        assert!(script.contains("player.call(\"set_auto_move\""));
+        assert!(script.contains("player.call(\"get_sprint_speed\")"));
+        assert!(script.contains("player.call(\"stop_auto_move\")"));
     }
 
     #[test]
