@@ -17,9 +17,13 @@ osm-godot 是一个 Rust CLI 工具，用 OpenStreetMap 数据生成 Godot 4.x 3
   `cargo run --target-dir E:\tmp\osm-godot-target -- --file E:\tmp\osm-godot-xian-yanta-style-osm.json --bbox "34.2160,108.9550,34.2210,108.9620" --output-dir E:\tmp\osm-godot-xian-yanta-style-vN --chunk-size 128`
 - Generate live OSM data through local proxy:
   `$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "34.210594,108.947432,34.226406,108.969568" --output-dir E:\tmp\osm-godot-xian-yanta-style-vN --chunk-size 128`
+- Generate full Shanghai streaming/navigation project:
+  `$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --release --target-dir E:\tmp\osm-godot-target-release -- --bbox "30.67,120.85,31.88,122.12" --output-dir E:\tmp\osm-godot-shanghai-city-vN-navigation-c512 --chunk-size 512 --stream-radius 1 --tiled-fetch --fetch-tile-degrees 0.25 --tile-cache-dir E:\tmp\osm-godot-cache\shanghai`
 - Diff check: `git diff --check`
 
 Prefer `--target-dir E:\tmp\osm-godot-target` so local build artifacts do not churn inside the repo.
+
+Full Shanghai generation is a long-running job. Do not use short command timeouts such as 30 or 90 minutes and then assume failure. Use a several-hour timeout when the tool supports it; if the command times out, first check for live `cargo` / `osm-godot` processes and the output directory before retrying or changing strategy. On this machine the process can spend more than 90 minutes CPU-bound before writing the final `project.godot`.
 
 ## Architecture Overview
 

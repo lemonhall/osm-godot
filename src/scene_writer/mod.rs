@@ -1033,6 +1033,7 @@ func _to_transform(values: Array) -> Transform3D:
 @export var guidance_update_interval := 0.2
 @export var route_ribbon_width := 2.4
 @export var arrival_radius := 5.0
+@export var max_route_attempts := 1
 
 var player: Node3D = null
 var navigation_entries := []
@@ -1040,6 +1041,10 @@ var graph_nodes := []
 var graph_edges := []
 var adjacency := {}
 var node_positions := {}
+var adjacency_array := []
+var node_positions_array := []
+var node_index_by_id := {}
+var graph_loaded := false
 var route_waypoints := []
 var route_total_distance := 0.0
 var current_instruction := ""
@@ -1065,8 +1070,7 @@ var navigation_start_in_progress := false
 
 func _ready() -> void:
 	player = get_node_or_null(player_path) as Node3D
-	_load_navigation_data()
-	_build_runtime_nodes()
+	_load_navigation_index()
 	_build_hud()
 	_build_route_overlay()
 	set_process(true)
@@ -1131,11 +1135,17 @@ func get_graph_node_count() -> int:
 func get_graph_edge_count() -> int:
 	return graph_edges.size()
 
-func _load_navigation_data() -> void:
+func _load_navigation_index() -> void:
 	navigation_entries = _load_json_array(index_path, "entries")
+
+func _load_navigation_graph() -> void:
+	if graph_loaded:
+		return
 	var graph := _load_json_dict(graph_path)
 	graph_nodes = graph.get("nodes", [])
 	graph_edges = graph.get("edges", [])
+	_build_runtime_nodes()
+	graph_loaded = true
 
 func _load_json_dict(path: String) -> Dictionary:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -1158,6 +1168,9 @@ func _load_json_array(path: String, key: String) -> Array:
 func _build_runtime_nodes() -> void:
 	adjacency.clear()
 	node_positions.clear()
+	adjacency_array.clear()
+	node_positions_array.clear()
+	node_index_by_id.clear()
 	for node in graph_nodes:
 		if typeof(node) != TYPE_DICTIONARY:
 			continue
@@ -1165,21 +1178,30 @@ func _build_runtime_nodes() -> void:
 		var pos: Array = node.get("position", [])
 		if id.is_empty() or pos.size() < 2:
 			continue
-		node_positions[id] = Vector3(float(pos[0]), 0.2, float(pos[1]))
+		var index := node_positions_array.size()
+		var world_pos := Vector3(float(pos[0]), 0.2, float(pos[1]))
+		node_index_by_id[id] = index
+		node_positions[id] = world_pos
+		node_positions_array.append(world_pos)
 		adjacency[id] = []
+		adjacency_array.append([])
 	for edge in graph_edges:
 		if typeof(edge) != TYPE_DICTIONARY:
 			continue
 		var from_id := str(edge.get("from", ""))
 		var to_id := str(edge.get("to", ""))
-		if from_id.is_empty() or to_id.is_empty() or not adjacency.has(from_id):
+		if from_id.is_empty() or to_id.is_empty() or not adjacency.has(from_id) or not node_index_by_id.has(to_id):
 			continue
+		var from_index := int(node_index_by_id[from_id])
+		var to_index := int(node_index_by_id[to_id])
+		var cost: float = max(0.001, float(edge.get("cost", 1.0)))
 		adjacency[from_id].append({
 			"to": to_id,
-			"cost": max(0.001, float(edge.get("cost", 1.0))),
+			"cost": cost,
 			"name": str(edge.get("name", "")),
 			"highway": str(edge.get("highway", "")),
 		})
+		adjacency_array[from_index].append([to_index, cost])
 
 func _entry_matches(entry: Dictionary, needle: String) -> bool:
 	for key in ["name", "official_name", "alt_name", "old_name", "building", "highway", "amenity", "shop", "tourism", "addr:street"]:
@@ -1188,7 +1210,12 @@ func _entry_matches(entry: Dictionary, needle: String) -> bool:
 	return str(entry.get("osm_id", "")).contains(needle)
 
 func _start_navigation_to_entry(entry: Dictionary) -> bool:
-	if node_positions.is_empty() or adjacency.is_empty():
+	if not graph_loaded:
+		navigation_status = "loading_graph"
+		current_instruction = "Loading route graph"
+		_update_hud()
+		_load_navigation_graph()
+	if node_positions_array.is_empty() or adjacency_array.is_empty():
 		navigation_status = "graph_empty"
 		current_instruction = "Navigation graph is empty"
 		_update_hud()
@@ -1204,8 +1231,8 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 		current_instruction = "Destination has no center"
 		_update_hud()
 		return false
-	var start_candidates := _nearest_graph_nodes(player.global_position, 8, 80.0)
-	var goal_candidates := _nearest_graph_nodes(Vector3(float(center[0]), 0.0, float(center[1])), 16, 140.0)
+	var start_candidates := _nearest_graph_nodes(player.global_position, 1, 120.0)
+	var goal_candidates := _nearest_graph_nodes(Vector3(float(center[0]), 0.0, float(center[1])), 1, 220.0)
 	if start_candidates.is_empty() or goal_candidates.is_empty():
 		navigation_status = "snap_failed"
 		current_instruction = "Could not snap to road"
@@ -1218,8 +1245,8 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 		_update_hud()
 		return false
 	route_waypoints.clear()
-	for node_id in node_path:
-		route_waypoints.append(node_positions[str(node_id)])
+	for node_index in node_path:
+		route_waypoints.append(node_positions_array[int(node_index)])
 	route_total_distance = _route_distance(route_waypoints)
 	destination_name = _entry_display_name(entry)
 	destination_position = route_waypoints.back() as Vector3
@@ -1236,29 +1263,36 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	return true
 
 func _nearest_graph_node(pos: Vector3) -> String:
+	var index := _nearest_graph_node_index(pos)
+	if index < 0:
+		return ""
+	return "n" + str(index)
+
+func _nearest_graph_node_index(pos: Vector3) -> int:
 	var best_id := ""
+	var best_index := -1
 	var best_dist := INF
-	for id in node_positions.keys():
-		var node_pos: Vector3 = node_positions[id]
+	for i in range(node_positions_array.size()):
+		var node_pos: Vector3 = node_positions_array[i]
 		var dx := node_pos.x - pos.x
 		var dz := node_pos.z - pos.z
 		var dist := dx * dx + dz * dz
 		if dist < best_dist:
 			best_dist = dist
-			best_id = str(id)
-	return best_id
+			best_index = i
+	return best_index
 
 func _nearest_graph_nodes(pos: Vector3, limit: int, max_distance: float) -> Array:
 	var remaining := []
-	for id in node_positions.keys():
-		var node_pos: Vector3 = node_positions[id]
+	for i in range(node_positions_array.size()):
+		var node_pos: Vector3 = node_positions_array[i]
 		var distance := Vector2(node_pos.x - pos.x, node_pos.z - pos.z).length()
 		if distance <= max_distance:
-			remaining.append({"id": str(id), "distance": distance})
+			remaining.append({"index": i, "distance": distance})
 	if remaining.is_empty():
-		var fallback := _nearest_graph_node(pos)
-		if not fallback.is_empty():
-			remaining.append({"id": fallback, "distance": 0.0})
+		var fallback := _nearest_graph_node_index(pos)
+		if fallback >= 0:
+			remaining.append({"index": fallback, "distance": 0.0})
 	var results := []
 	while results.size() < limit and not remaining.is_empty():
 		var best_index := 0
@@ -1275,75 +1309,132 @@ func _nearest_graph_nodes(pos: Vector3, limit: int, max_distance: float) -> Arra
 func _find_best_route(start_candidates: Array, goal_candidates: Array) -> Array:
 	var best_path := []
 	var best_cost := INF
+	var pairs := []
 	for start in start_candidates:
-		var start_id := str(start.get("id", ""))
-		if start_id.is_empty():
+		var start_index := int(start.get("index", -1))
+		if start_index < 0:
 			continue
 		for goal in goal_candidates:
-			var goal_id := str(goal.get("id", ""))
-			if goal_id.is_empty():
+			var goal_index := int(goal.get("index", -1))
+			if goal_index < 0:
 				continue
-			var path := _find_route(start_id, goal_id)
-			if path.size() < 2:
-				continue
-			var cost := _path_cost(path) + float(start.get("distance", 0.0)) + float(goal.get("distance", 0.0))
-			if cost < best_cost:
-				best_cost = cost
-				best_path = path
+			pairs.append({
+				"start_index": start_index,
+				"goal_index": goal_index,
+				"snap_cost": float(start.get("distance", 0.0)) + float(goal.get("distance", 0.0)),
+			})
+	var attempts := 0
+	while not pairs.is_empty() and attempts < max_route_attempts:
+		var best_index := 0
+		var best_snap := float(pairs[0].get("snap_cost", INF))
+		for i in range(1, pairs.size()):
+			var snap := float(pairs[i].get("snap_cost", INF))
+			if snap < best_snap:
+				best_index = i
+				best_snap = snap
+		var pair: Dictionary = pairs[best_index]
+		pairs.remove_at(best_index)
+		attempts += 1
+		var start_index := int(pair.get("start_index", -1))
+		var goal_index := int(pair.get("goal_index", -1))
+		if start_index < 0 or goal_index < 0:
+			continue
+		var path := _find_route(start_index, goal_index)
+		if path.size() < 2:
+			continue
+		var cost := _path_cost(path) + float(pair.get("snap_cost", 0.0))
+		if cost < best_cost:
+			best_cost = cost
+			best_path = path
 	return best_path
 
-func _find_route(start_id: String, goal_id: String) -> Array:
-	var open_set := [start_id]
-	var came_from := {}
-	var g_score := {start_id: 0.0}
-	var f_score := {start_id: _heuristic(start_id, goal_id)}
-	while not open_set.is_empty():
-		var current := _lowest_score_node(open_set, f_score)
-		if current == goal_id:
+func _find_route(start_index: int, goal_index: int) -> Array:
+	var count := node_positions_array.size()
+	if start_index < 0 or goal_index < 0 or start_index >= count or goal_index >= count:
+		return []
+	var open_heap := []
+	var came_from := []
+	came_from.resize(count)
+	came_from.fill(-1)
+	var g_score := []
+	g_score.resize(count)
+	g_score.fill(INF)
+	var closed := []
+	closed.resize(count)
+	closed.fill(false)
+	g_score[start_index] = 0.0
+	_heap_push(open_heap, [_heuristic_index(start_index, goal_index), start_index])
+	while not open_heap.is_empty():
+		var current_item: Array = _heap_pop(open_heap)
+		var current := int(current_item[1])
+		if current < 0 or current >= count or bool(closed[current]):
+			continue
+		if current == goal_index:
 			return _reconstruct_path(came_from, current)
-		open_set.erase(current)
-		for edge in adjacency.get(current, []):
-			var next_id := str(edge.get("to", ""))
-			if next_id.is_empty() or not node_positions.has(next_id):
+		closed[current] = true
+		for edge in adjacency_array[current]:
+			var next_index := int(edge[0])
+			if next_index < 0 or next_index >= count or bool(closed[next_index]):
 				continue
-			var tentative := float(g_score.get(current, INF)) + float(edge.get("cost", 1.0))
-			if tentative < float(g_score.get(next_id, INF)):
-				came_from[next_id] = current
-				g_score[next_id] = tentative
-				f_score[next_id] = tentative + _heuristic(next_id, goal_id)
-				if not open_set.has(next_id):
-					open_set.append(next_id)
+			var tentative := float(g_score[current]) + float(edge[1])
+			if tentative < float(g_score[next_index]):
+				came_from[next_index] = current
+				g_score[next_index] = tentative
+				_heap_push(open_heap, [tentative + _heuristic_index(next_index, goal_index), next_index])
 	return []
 
 func _path_cost(path: Array) -> float:
 	var total := 0.0
 	for i in range(1, path.size()):
-		var a := str(path[i - 1])
-		var b := str(path[i])
-		if node_positions.has(a) and node_positions.has(b):
-			total += node_positions[a].distance_to(node_positions[b])
+		var a := int(path[i - 1])
+		var b := int(path[i])
+		if a >= 0 and b >= 0 and a < node_positions_array.size() and b < node_positions_array.size():
+			total += node_positions_array[a].distance_to(node_positions_array[b])
 	return total
 
-func _lowest_score_node(open_set: Array, f_score: Dictionary) -> String:
-	var best := str(open_set[0])
-	var best_score := float(f_score.get(best, INF))
-	for value in open_set:
-		var id := str(value)
-		var score := float(f_score.get(id, INF))
-		if score < best_score:
-			best = id
-			best_score = score
-	return best
+func _heap_push(heap: Array, item: Array) -> void:
+	heap.append(item)
+	var index := heap.size() - 1
+	while index > 0:
+		var parent := int((index - 1) / 2)
+		if float(heap[parent][0]) <= float(heap[index][0]):
+			break
+		var tmp = heap[parent]
+		heap[parent] = heap[index]
+		heap[index] = tmp
+		index = parent
 
-func _heuristic(a: String, b: String) -> float:
-	if not node_positions.has(a) or not node_positions.has(b):
+func _heap_pop(heap: Array) -> Array:
+	var root: Array = heap[0]
+	var last = heap.pop_back()
+	if not heap.is_empty():
+		heap[0] = last
+		var index := 0
+		while true:
+			var left := index * 2 + 1
+			var right := left + 1
+			var smallest := index
+			if left < heap.size() and float(heap[left][0]) < float(heap[smallest][0]):
+				smallest = left
+			if right < heap.size() and float(heap[right][0]) < float(heap[smallest][0]):
+				smallest = right
+			if smallest == index:
+				break
+			var tmp = heap[index]
+			heap[index] = heap[smallest]
+			heap[smallest] = tmp
+			index = smallest
+	return root
+
+func _heuristic_index(a: int, b: int) -> float:
+	if a < 0 or b < 0 or a >= node_positions_array.size() or b >= node_positions_array.size():
 		return 0.0
-	return node_positions[a].distance_to(node_positions[b])
+	return node_positions_array[a].distance_to(node_positions_array[b])
 
-func _reconstruct_path(came_from: Dictionary, current: String) -> Array:
+func _reconstruct_path(came_from: Array, current: int) -> Array:
 	var total := [current]
-	while came_from.has(current):
-		current = str(came_from[current])
+	while current >= 0 and current < came_from.size() and int(came_from[current]) >= 0:
+		current = int(came_from[current])
 		total.push_front(current)
 	return total
 
@@ -2492,6 +2583,16 @@ mod tests {
         assert!(script.contains("navigation_graph.json"));
         assert!(script.contains("func _find_route"));
         assert!(script.contains("func _nearest_graph_node"));
+        assert!(script.contains("func _load_navigation_index() -> void:"));
+        assert!(script.contains("func _load_navigation_graph() -> void:"));
+        assert!(script.contains("if not graph_loaded:"));
+        assert!(script.contains("@export var max_route_attempts := 1"));
+        assert!(script.contains("var adjacency_array := []"));
+        assert!(script.contains("var node_positions_array := []"));
+        assert!(script.contains("func _heap_push(heap: Array, item: Array) -> void:"));
+        assert!(script.contains("func _heap_pop(heap: Array) -> Array:"));
+        assert!(script.contains("func _heuristic_index(a: int, b: int) -> float:"));
+        assert!(!script.contains("func _lowest_score_node"));
         assert!(!script.contains("DisplayServer.tts_speak"));
         for forbidden in ["HTTPRequest", "HTTPClient", "WebSocketPeer", "https://", "http://"] {
             assert!(
