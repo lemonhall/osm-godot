@@ -52,11 +52,13 @@
 - 道路已写入 chunk JSON；不再生成或依赖全图 `mesh_data/roads.json`。
 - Overpass 大 bbox 已支持 tiled fetch、cache 和 `(type,id)` 去重。
 - 已生成 `navigation_index.json`，道路/建筑记录包含 chunk、center、bbox 和 OSM 元数据。
+- 修复全上海运行时低 FPS 根因：`world_streamer.gd` 不再每帧全量扫描 manifest；`chunk_mesh_loader.gd` 按材质合批 mesh，同时保留轻量 OSM metadata marker。
 
 新增发现：
 
 - 整上海使用 `--chunk-size 128` 会产生十几万到二十多万个 chunk 文件，生成和 Godot import 都过慢；本机验收路径改为 `--chunk-size 512 --stream-radius 1`，实际输出 `33879` 个非空 chunk，E2E 仍只加载 player 附近最多 `3x3` 个 chunk。
 - OSM 中存在异常建筑 `way 1371593537`，`building:levels=1235678911121415`；已在高度解析和 facade 细节生成处增加限幅测试，避免单个脏数据触发巨量 mesh 分配。
+- 全上海 c512 初始视距内原始 element 仍很多：9 个 chunk 覆盖 `5402` 个 element；合批后实际 `MeshInstance3D=136`，streamer 稳态刷新 `avg_refresh_usec=7.05`。
 
 验证证据：
 
@@ -64,3 +66,4 @@
 - `cargo test --target-dir E:\tmp\osm-godot-target element_processing::buildings -- --nocapture`：9 passed。
 - 外滩 v6：`E:\tmp\osm-godot-shanghai-bund-v6-streaming`，Godot import exit 0，E2E exit 0。
 - 整上海 c512：`E:\tmp\osm-godot-shanghai-city-v2-streaming-c512`，Godot import exit 0，E2E exit 0。
+- 性能探针：`tools\godot_streaming_perf_probe.gd` 在外滩 v6 和整上海 c512 上 exit 0。

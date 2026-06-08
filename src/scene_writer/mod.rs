@@ -742,107 +742,117 @@ impl SceneWriter {
         let path = scripts_dir.join("chunk_mesh_loader.gd");
         let mut f = std::fs::File::create(&path)?;
 
-        writeln!(f, "@tool")?;
-        writeln!(f, "extends Node3D")?;
-        writeln!(f)?;
-        writeln!(f, "@export var mesh_data_path := \"\"")?;
-        writeln!(f)?;
-        writeln!(f, "func _ready() -> void:")?;
-        writeln!(f, "\t_load_meshes()")?;
-        writeln!(f)?;
-        writeln!(f, "func _load_meshes() -> void:")?;
-        writeln!(f, "\t_clear_generated_children()")?;
-        writeln!(f, "\tif mesh_data_path.is_empty():")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(
-            f,
-            "\tvar file := FileAccess.open(mesh_data_path, FileAccess.READ)"
-        )?;
-        writeln!(f, "\tif file == null:")?;
-        writeln!(
-            f,
-            "\t\tpush_error(\"Failed to open mesh data: \" + mesh_data_path)"
-        )?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(
-            f,
-            "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())"
-        )?;
-        writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
-        writeln!(
-            f,
-            "\t\tpush_error(\"Invalid mesh data: \" + mesh_data_path)"
-        )?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tfor element in parsed.get(\"elements\", []):")?;
-        writeln!(f, "\t\t_add_mesh_instance(element)")?;
-        writeln!(f)?;
-        writeln!(f, "func _clear_generated_children() -> void:")?;
-        writeln!(f, "\tfor child in get_children():")?;
-        writeln!(f, "\t\tif child.get_meta(\"osm_generated\", false):")?;
-        writeln!(f, "\t\t\tremove_child(child)")?;
-        writeln!(f, "\t\t\tchild.queue_free()")?;
-        writeln!(f)?;
-        writeln!(f, "func _add_mesh_instance(element: Dictionary) -> void:")?;
-        writeln!(f, "\tvar mesh := ArrayMesh.new()")?;
-        writeln!(f, "\tvar arrays := []")?;
-        writeln!(f, "\tarrays.resize(Mesh.ARRAY_MAX)")?;
-        writeln!(
-            f,
-            "\tarrays[Mesh.ARRAY_VERTEX] = _to_vec3_array(element.get(\"vertices\", []))"
-        )?;
-        writeln!(
-            f,
-            "\tarrays[Mesh.ARRAY_NORMAL] = _to_vec3_array(element.get(\"normals\", []))"
-        )?;
-        writeln!(
-            f,
-            "\tarrays[Mesh.ARRAY_TEX_UV] = _to_vec2_array(element.get(\"uvs\", []))"
-        )?;
-        writeln!(
-            f,
-            "\tarrays[Mesh.ARRAY_INDEX] = _to_int_array(element.get(\"indices\", []))"
-        )?;
-        writeln!(
-            f,
-            "\tif arrays[Mesh.ARRAY_VERTEX].is_empty() or arrays[Mesh.ARRAY_INDEX].is_empty():"
-        )?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(
-            f,
-            "\tmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)"
-        )?;
-        writeln!(f, "\tvar instance := MeshInstance3D.new()")?;
-        writeln!(f, "\tinstance.name = str(element.get(\"name\", \"Mesh\"))")?;
-        writeln!(f, "\tinstance.mesh = mesh")?;
-        writeln!(
-            f,
-            "\tinstance.transform = _to_transform(element.get(\"transform\", []))"
-        )?;
-        writeln!(
-            f,
-            "\tvar material_name := str(element.get(\"material\", \"terrain_grass\"))"
-        )?;
-        writeln!(
-            f,
-            "\tvar material = load(\"res://materials/\" + material_name + \".tres\")"
-        )?;
-        writeln!(f, "\tif material != null:")?;
-        writeln!(f, "\t\tinstance.set_surface_override_material(0, material)")?;
-        writeln!(f, "\tinstance.set_meta(\"osm_generated\", true)")?;
-        writeln!(
-            f,
-            "\t_apply_metadata(instance, element.get(\"metadata\", {{}}))"
-        )?;
-        writeln!(f, "\tadd_child(instance)")?;
-        writeln!(
-            f,
-            "\tinstance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner"
-        )?;
-        writeln!(f, "\tif _should_add_collision(material_name):")?;
-        writeln!(
-            f,
-            "\t\t_add_collision_body(str(instance.name), mesh, instance.transform)"
+        f.write_all(
+            r#"extends Node3D
+
+@export var mesh_data_path := ""
+
+func _ready() -> void:
+	_load_meshes()
+
+func _load_meshes() -> void:
+	_clear_generated_children()
+	if mesh_data_path.is_empty():
+		return
+	var file := FileAccess.open(mesh_data_path, FileAccess.READ)
+	if file == null:
+		push_error("Failed to open mesh data: " + mesh_data_path)
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("Invalid mesh data: " + mesh_data_path)
+		return
+	var batches := {}
+	for element in parsed.get("elements", []):
+		_add_element_to_batch(element, batches)
+	for material_name in batches.keys():
+		_create_batch_instance(str(material_name), batches[material_name])
+
+func _clear_generated_children() -> void:
+	for child in get_children():
+		if child.get_meta("osm_generated", false):
+			remove_child(child)
+			child.queue_free()
+
+func _new_batch() -> Dictionary:
+	return {
+		"vertices": [],
+		"normals": [],
+		"uvs": [],
+		"indices": [],
+		"collision": false,
+		"road": false,
+		"count": 0,
+	}
+
+func _add_element_to_batch(element: Dictionary, batches: Dictionary) -> void:
+	var material_name := str(element.get("material", "terrain_grass"))
+	if not batches.has(material_name):
+		batches[material_name] = _new_batch()
+	var batch: Dictionary = batches[material_name]
+	var transform := _to_transform(element.get("transform", []))
+	var vertices: Array = element.get("vertices", [])
+	var indices: Array = element.get("indices", [])
+	if vertices.is_empty() or indices.is_empty():
+		return
+	var base_index: int = batch["vertices"].size()
+	for i in range(0, vertices.size() - 2, 3):
+		var vertex := Vector3(float(vertices[i]), float(vertices[i + 1]), float(vertices[i + 2]))
+		batch["vertices"].append(transform * vertex)
+	var normals: Array = element.get("normals", [])
+	for i in range(0, normals.size() - 2, 3):
+		var normal := Vector3(float(normals[i]), float(normals[i + 1]), float(normals[i + 2]))
+		batch["normals"].append((transform.basis * normal).normalized())
+	var uvs: Array = element.get("uvs", [])
+	for i in range(0, uvs.size() - 1, 2):
+		batch["uvs"].append(Vector2(float(uvs[i]), float(uvs[i + 1])))
+	for value in indices:
+		batch["indices"].append(int(value) + base_index)
+	batch["collision"] = bool(batch["collision"]) or _should_add_collision(material_name)
+	batch["road"] = bool(batch["road"]) or material_name.begins_with("road_")
+	batch["count"] = int(batch["count"]) + 1
+	_add_metadata_marker(element, transform)
+
+func _create_batch_instance(material_name: String, batch: Dictionary) -> void:
+	var mesh := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array(batch["vertices"])
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array(batch["normals"])
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array(batch["uvs"])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array(batch["indices"])
+	if arrays[Mesh.ARRAY_VERTEX].is_empty() or arrays[Mesh.ARRAY_INDEX].is_empty():
+		return
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var instance := MeshInstance3D.new()
+	instance.name = "Batch_" + material_name
+	instance.mesh = mesh
+	var material = load("res://materials/" + material_name + ".tres")
+	if material != null:
+		instance.set_surface_override_material(0, material)
+	instance.set_meta("osm_generated", true)
+	instance.set_meta("batch_material", material_name)
+	instance.set_meta("batch_element_count", int(batch["count"]))
+	if bool(batch["road"]):
+		instance.set_meta("osm_kind", "road")
+	add_child(instance)
+	instance.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+	if bool(batch["collision"]):
+		_add_collision_body(instance.name, mesh, Transform3D.IDENTITY)
+
+func _add_metadata_marker(element: Dictionary, transform: Transform3D) -> void:
+	var metadata: Variant = element.get("metadata", {})
+	if typeof(metadata) != TYPE_DICTIONARY or metadata.is_empty():
+		return
+	var marker := Node3D.new()
+	marker.name = str(element.get("name", "Meta")) + "_Meta"
+	marker.transform = transform
+	marker.set_meta("osm_generated", true)
+	_apply_metadata(marker, metadata)
+	add_child(marker)
+	marker.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+"#
+            .as_bytes(),
         )?;
         writeln!(f)?;
         writeln!(f, "func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:")?;
@@ -949,165 +959,132 @@ impl SceneWriter {
         let path = scripts_dir.join("world_streamer.gd");
         let mut f = std::fs::File::create(&path)?;
 
-        writeln!(f, "extends Node3D")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "@export var manifest_path := \"res://world_manifest.json\""
-        )?;
-        writeln!(
-            f,
-            "@export var player_path: NodePath = NodePath(\"../Player\")"
-        )?;
-        writeln!(
-            f,
-            "@export var stream_radius := {}",
-            self.stream_radius.max(0)
-        )?;
-        writeln!(
-            f,
-            "@export var unload_radius := {}",
-            self.stream_radius.max(0) + 1
-        )?;
-        writeln!(f)?;
-        writeln!(f, "var manifest := {{}}")?;
-        writeln!(f, "var chunk_entries := {{}}")?;
-        writeln!(f, "var loaded_chunks := {{}}")?;
-        writeln!(f, "var player: Node3D = null")?;
-        writeln!(f)?;
-        writeln!(f, "func _ready() -> void:")?;
-        writeln!(f, "\t_load_manifest()")?;
-        writeln!(f, "\tplayer = get_node_or_null(player_path) as Node3D")?;
-        writeln!(f, "\t_refresh_streaming()")?;
-        writeln!(f)?;
-        writeln!(f, "func _physics_process(_delta: float) -> void:")?;
-        writeln!(f, "\t_refresh_streaming()")?;
-        writeln!(f)?;
-        writeln!(f, "func _load_manifest() -> void:")?;
-        writeln!(
-            f,
-            "\tvar file := FileAccess.open(manifest_path, FileAccess.READ)"
-        )?;
-        writeln!(f, "\tif file == null:")?;
-        writeln!(
-            f,
-            "\t\tpush_error(\"Failed to open world manifest: \" + manifest_path)"
-        )?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar parsed = JSON.parse_string(file.get_as_text())")?;
-        writeln!(f, "\tif typeof(parsed) != TYPE_DICTIONARY:")?;
-        writeln!(
-            f,
-            "\t\tpush_error(\"Invalid world manifest: \" + manifest_path)"
-        )?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tmanifest = parsed")?;
-        writeln!(f, "\tchunk_entries.clear()")?;
-        writeln!(f, "\tfor entry in manifest.get(\"chunks\", []):")?;
-        writeln!(f, "\t\tvar coord: Array = entry.get(\"coord\", [])")?;
-        writeln!(f, "\t\tif coord.size() < 2:")?;
-        writeln!(f, "\t\t\tcontinue")?;
-        writeln!(
-            f,
-            "\t\tchunk_entries[_chunk_key(int(coord[0]), int(coord[1]))] = entry"
-        )?;
-        writeln!(f)?;
-        writeln!(f, "func _refresh_streaming() -> void:")?;
-        writeln!(f, "\tif player == null:")?;
-        writeln!(f, "\t\tplayer = get_node_or_null(player_path) as Node3D")?;
-        writeln!(f, "\tif player == null or chunk_entries.is_empty():")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(
-            f,
-            "\tvar current: Array = _find_player_chunk(player.global_position)"
-        )?;
-        writeln!(f, "\tif current.size() < 2:")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar keep: Dictionary = {{}}")?;
-        writeln!(f, "\tfor dx in range(-stream_radius, stream_radius + 1):")?;
-        writeln!(f, "\t\tfor dz in range(-stream_radius, stream_radius + 1):")?;
-        writeln!(f, "\t\t\tvar cx := int(current[0]) + dx")?;
-        writeln!(f, "\t\t\tvar cz := int(current[1]) + dz")?;
-        writeln!(f, "\t\t\tvar key := _chunk_key(cx, cz)")?;
-        writeln!(f, "\t\t\tif chunk_entries.has(key):")?;
-        writeln!(f, "\t\t\t\tkeep[key] = true")?;
-        writeln!(f, "\t\t\t\t_load_chunk(key)")?;
-        writeln!(f, "\t_unload_far_chunks(current, keep)")?;
-        writeln!(f)?;
-        writeln!(f, "func _load_chunk(key: String) -> void:")?;
-        writeln!(f, "\tif loaded_chunks.has(key):")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar entry: Dictionary = chunk_entries[key]")?;
-        writeln!(
-            f,
-            "\tvar packed := load(str(entry.get(\"scene_path\", \"\"))) as PackedScene"
-        )?;
-        writeln!(f, "\tif packed == null:")?;
-        writeln!(f, "\t\tpush_error(\"Failed to load chunk scene: \" + str(entry.get(\"scene_path\", \"\")))")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tvar instance := packed.instantiate() as Node3D")?;
-        writeln!(f, "\tvar origin: Array = entry.get(\"origin\", [0.0, 0.0])")?;
-        writeln!(
-            f,
-            "\tinstance.position = Vector3(float(origin[0]), 0.0, float(origin[1]))"
-        )?;
-        writeln!(f, "\tinstance.set_meta(\"chunk_key\", key)")?;
-        writeln!(f, "\tinstance.set_meta(\"streamed_chunk\", true)")?;
-        writeln!(f, "\tadd_child(instance)")?;
-        writeln!(f, "\tloaded_chunks[key] = instance")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "func _unload_far_chunks(current: Array, keep: Dictionary) -> void:"
-        )?;
-        writeln!(f, "\tfor key in loaded_chunks.keys():")?;
-        writeln!(f, "\t\tif keep.has(key):")?;
-        writeln!(f, "\t\t\tcontinue")?;
-        writeln!(f, "\t\tvar coord: Array = _parse_chunk_key(key)")?;
-        writeln!(f, "\t\tif coord.size() < 2:")?;
-        writeln!(f, "\t\t\tcontinue")?;
-        writeln!(f, "\t\tvar dist: int = max(abs(int(coord[0]) - int(current[0])), abs(int(coord[1]) - int(current[1])))")?;
-        writeln!(f, "\t\tif dist > unload_radius:")?;
-        writeln!(f, "\t\t\tvar node: Node = loaded_chunks[key]")?;
-        writeln!(f, "\t\t\tloaded_chunks.erase(key)")?;
-        writeln!(f, "\t\t\tnode.queue_free()")?;
-        writeln!(f)?;
-        writeln!(f, "func _find_player_chunk(pos: Vector3) -> Array:")?;
-        writeln!(f, "\tvar best: Array = []")?;
-        writeln!(f, "\tvar best_d2: float = INF")?;
-        writeln!(f, "\tfor key in chunk_entries.keys():")?;
-        writeln!(f, "\t\tvar entry: Dictionary = chunk_entries[key]")?;
-        writeln!(f, "\t\tvar bounds: Array = entry.get(\"bounds_godot\", [])")?;
-        writeln!(f, "\t\tif bounds.size() < 4:")?;
-        writeln!(f, "\t\t\tcontinue")?;
-        writeln!(f, "\t\tvar min_x := float(bounds[0])")?;
-        writeln!(f, "\t\tvar min_z := float(bounds[1])")?;
-        writeln!(f, "\t\tvar max_x := float(bounds[2])")?;
-        writeln!(f, "\t\tvar max_z := float(bounds[3])")?;
-        writeln!(
-            f,
-            "\t\tif pos.x >= min_x and pos.x <= max_x and pos.z >= min_z and pos.z <= max_z:"
-        )?;
-        writeln!(f, "\t\t\treturn entry.get(\"coord\", [])")?;
-        writeln!(f, "\t\tvar cx: float = clamp(pos.x, min_x, max_x)")?;
-        writeln!(f, "\t\tvar cz: float = clamp(pos.z, min_z, max_z)")?;
-        writeln!(
-            f,
-            "\t\tvar d2: float = Vector2(pos.x - cx, pos.z - cz).length_squared()"
-        )?;
-        writeln!(f, "\t\tif d2 < best_d2:")?;
-        writeln!(f, "\t\t\tbest_d2 = d2")?;
-        writeln!(f, "\t\t\tbest = entry.get(\"coord\", [])")?;
-        writeln!(f, "\treturn best")?;
-        writeln!(f)?;
-        writeln!(f, "func _chunk_key(cx: int, cz: int) -> String:")?;
-        writeln!(f, "\treturn str(cx) + \":\" + str(cz)")?;
-        writeln!(f)?;
-        writeln!(f, "func _parse_chunk_key(key: String) -> Array:")?;
-        writeln!(f, "\tvar parts := key.split(\":\")")?;
-        writeln!(f, "\tif parts.size() < 2:")?;
-        writeln!(f, "\t\treturn []")?;
-        writeln!(f, "\treturn [int(parts[0]), int(parts[1])]")?;
+        let script = format!(
+            r#"extends Node3D
+
+@export var manifest_path := "res://world_manifest.json"
+@export var player_path: NodePath = NodePath("../Player")
+@export var stream_radius := {stream_radius}
+@export var unload_radius := {unload_radius}
+
+var manifest := {{}}
+var chunk_entries := {{}}
+var loaded_chunks := {{}}
+var player: Node3D = null
+var chunk_size_blocks := 1.0
+var godot_scale := 1.0
+var last_player_chunk_key := ""
+
+func _ready() -> void:
+	_load_manifest()
+	player = get_node_or_null(player_path) as Node3D
+	_refresh_streaming()
+
+func _physics_process(_delta: float) -> void:
+	_refresh_streaming()
+
+func _load_manifest() -> void:
+	var file := FileAccess.open(manifest_path, FileAccess.READ)
+	if file == null:
+		push_error("Failed to open world manifest: " + manifest_path)
+		return
+	var parsed = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("Invalid world manifest: " + manifest_path)
+		return
+	manifest = parsed
+	chunk_size_blocks = max(1.0, float(manifest.get("chunk_size_blocks", 1)))
+	godot_scale = max(0.001, float(manifest.get("godot_scale", 1.0)))
+	chunk_entries.clear()
+	for entry in manifest.get("chunks", []):
+		var coord: Array = entry.get("coord", [])
+		if coord.size() < 2:
+			continue
+		chunk_entries[_chunk_key(int(coord[0]), int(coord[1]))] = entry
+
+func _refresh_streaming() -> void:
+	if player == null:
+		player = get_node_or_null(player_path) as Node3D
+	if player == null or chunk_entries.is_empty():
+		return
+	var current: Array = _find_player_chunk(player.global_position)
+	if current.size() < 2:
+		return
+	var current_key := _chunk_key(int(current[0]), int(current[1]))
+	if current_key == last_player_chunk_key and not loaded_chunks.is_empty():
+		return
+	last_player_chunk_key = current_key
+	var keep: Dictionary = {{}}
+	for dx in range(-stream_radius, stream_radius + 1):
+		for dz in range(-stream_radius, stream_radius + 1):
+			var cx := int(current[0]) + dx
+			var cz := int(current[1]) + dz
+			var key := _chunk_key(cx, cz)
+			if chunk_entries.has(key):
+				keep[key] = true
+				_load_chunk(key)
+	_unload_far_chunks(current, keep)
+
+func _load_chunk(key: String) -> void:
+	if loaded_chunks.has(key):
+		return
+	var entry: Dictionary = chunk_entries[key]
+	var packed := load(str(entry.get("scene_path", ""))) as PackedScene
+	if packed == null:
+		push_error("Failed to load chunk scene: " + str(entry.get("scene_path", "")))
+		return
+	var instance := packed.instantiate() as Node3D
+	var origin: Array = entry.get("origin", [0.0, 0.0])
+	instance.position = Vector3(float(origin[0]), 0.0, float(origin[1]))
+	instance.set_meta("chunk_key", key)
+	instance.set_meta("streamed_chunk", true)
+	add_child(instance)
+	loaded_chunks[key] = instance
+
+func _unload_far_chunks(current: Array, keep: Dictionary) -> void:
+	for key in loaded_chunks.keys():
+		if keep.has(key):
+			continue
+		var coord: Array = _parse_chunk_key(key)
+		if coord.size() < 2:
+			continue
+		var dist: int = max(abs(int(coord[0]) - int(current[0])), abs(int(coord[1]) - int(current[1])))
+		if dist > unload_radius:
+			var node: Node = loaded_chunks[key]
+			loaded_chunks.erase(key)
+			node.queue_free()
+
+func _find_player_chunk(pos: Vector3) -> Array:
+	var coord := _coord_from_position(pos)
+	var key := _chunk_key(int(coord[0]), int(coord[1]))
+	if chunk_entries.has(key):
+		return coord
+	var search_radius: int = max(stream_radius, unload_radius) + 2
+	for dx in range(-search_radius, search_radius + 1):
+		for dz in range(-search_radius, search_radius + 1):
+			var nearby_key := _chunk_key(int(coord[0]) + dx, int(coord[1]) + dz)
+			if chunk_entries.has(nearby_key):
+				return chunk_entries[nearby_key].get("coord", [])
+	return []
+
+func _coord_from_position(pos: Vector3) -> Array:
+	var block_x := pos.x / godot_scale
+	var block_z := -pos.z / godot_scale
+	return [int(floor(block_x / chunk_size_blocks)), int(floor(block_z / chunk_size_blocks))]
+
+func _chunk_key(cx: int, cz: int) -> String:
+	return str(cx) + ":" + str(cz)
+
+func _parse_chunk_key(key: String) -> Array:
+	var parts := key.split(":")
+	if parts.size() < 2:
+		return []
+	return [int(parts[0]), int(parts[1])]
+"#,
+            stream_radius = self.stream_radius.max(0),
+            unload_radius = self.stream_radius.max(0) + 1
+        );
+        f.write_all(script.as_bytes())?;
 
         Ok(())
     }
@@ -1531,9 +1508,33 @@ mod tests {
         assert!(script.contains("out = out.replace(\":\", \"_\")"));
         assert!(script.contains("func _should_add_collision(material_name: String) -> bool:"));
         assert!(script.contains("material_name.begins_with(\"terrain_\")"));
-        assert!(!script.contains("material_name.begins_with(\"road_\")"));
-        assert!(!script.contains("material_name == \"railway_gravel\""));
-        assert!(!script.contains("material_name == \"building_wall\""));
+        let collision_fn = script
+            .split("func _should_add_collision(material_name: String) -> bool:")
+            .nth(1)
+            .unwrap();
+        assert!(!collision_fn.contains("material_name.begins_with(\"road_\")"));
+        assert!(!collision_fn.contains("material_name == \"railway_gravel\""));
+        assert!(!collision_fn.contains("material_name == \"building_wall\""));
+    }
+
+    #[test]
+    fn chunk_loader_batches_meshes_by_material_and_keeps_metadata_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
+                .unwrap();
+        assert!(script.contains("func _add_element_to_batch"));
+        assert!(script.contains("func _create_batch_instance"));
+        assert!(script.contains("func _add_metadata_marker"));
+        assert!(script.contains("batch_element_count"));
+        assert!(script.contains("PackedVector3Array(batch[\"vertices\"])"));
+        assert!(!script.contains("func _add_mesh_instance"));
     }
 
     #[test]
@@ -1600,6 +1601,10 @@ mod tests {
         assert!(script.contains("func _unload_far_chunks"));
         assert!(script.contains("world_manifest.json"));
         assert!(script.contains("loaded_chunks"));
+        assert!(script.contains("last_player_chunk_key"));
+        assert!(script.contains("func _coord_from_position(pos: Vector3) -> Array:"));
+        assert!(script.contains("chunk_size_blocks"));
+        assert!(!script.contains("for key in chunk_entries.keys():"));
     }
 
     #[test]

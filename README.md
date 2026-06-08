@@ -102,6 +102,11 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - 非空区块：`33879`
 - 导航索引：`445340` 条道路/建筑记录
 - E2E：启动时 `loaded_initial=9`，移动到远处后 chunk 集合变化，且道路 OSM metadata 可读。
+- 性能探针：启动 9 个 chunk 覆盖 `5402` 个原始 element，但合批后只创建 `136` 个 `MeshInstance3D`；streamer 稳态刷新约 `7.05us`，不再每帧扫描全量 `33879` 个 chunk。
+
+```powershell
+& 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-city-v2-streaming-c512 --script E:\development\osm-godot\tools\godot_streaming_perf_probe.gd
+```
 
 ### Arnis-style 建筑语法
 
@@ -169,6 +174,8 @@ output/
     ├── Chunk_0_1.tscn
     └── ...
 ```
+
+`chunk_mesh_loader.gd` 会按材质把同一 chunk 内的 mesh 合批成少量 `MeshInstance3D`，同时为道路/建筑保留轻量 metadata marker；`world_streamer.gd` 通过玩家坐标直接计算 chunk key，同一 chunk 内移动时不会重复扫描 manifest。
 
 ## Godot 漫游控制
 
