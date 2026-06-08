@@ -82,6 +82,25 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - 场景元素：`6981`
 - 非空区块：`269`
 
+### 上海外滩离线导航示例
+
+这份外滩导航工程在 streaming、player、道路、地面、光照和建筑多样性基础上，额外生成 `navigation_graph.json` 和 `scripts/navigation_controller.gd`。游戏运行时只读取本地 `navigation_index.json` 与 `navigation_graph.json`，不调用高德、Google、OSM、Overpass 或任何外部寻址/路径规划服务。
+
+```powershell
+$env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --target-dir E:\tmp\osm-godot-target -- --bbox "31.2290,121.4820,31.2455,121.5100" --output-dir E:\tmp\osm-godot-shanghai-bund-v7-navigation --chunk-size 128 --stream-radius 2
+```
+
+生成结果：
+
+- 输出工程：`E:\tmp\osm-godot-shanghai-bund-v7-navigation\project.godot`
+- 路网图：`7711` 个节点、`29986` 条边
+- 导航 E2E：从出生点搜索“外滩/外滩源”，生成 `74` 个 waypoint，路线距离约 `1148m`
+- Godot 验证：
+  ```powershell
+  & 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-bund-v7-navigation --import --quit
+  & 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-bund-v7-navigation --script E:\development\osm-godot\tools\godot_navigation_e2e.gd
+  ```
+
 ### 整个上海 streaming 示例
 
 整上海范围必须使用分片 Overpass 抓取和本地 tile cache。小 chunk 会产生过多文件；本机已验证通过的推荐组合是 `--chunk-size 512 --stream-radius 1`。它仍然生成完整上海 world package，但 Godot 运行时只请求玩家附近最多 `3x3` 个 chunk，并通过加载队列限制同时构建的 chunk 数。
@@ -125,6 +144,7 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - 常用字段：`node.get_meta("osm_id")`、`node.get_meta("osm_kind")`、`node.get_meta("name")`
 - 冒号字段会生成安全 key：例如 `addr:housenumber` 可通过 `addr_housenumber` 读取，`building:levels` 可通过 `building_levels` 读取。
 - 道路节点会包含 `highway`、`road_width_m`、`name` 等字段；建筑节点会包含 `building`、`amenity`、`shop`、`tourism`、地址、高度或层数等存在于 OSM 的字段。
+- `navigation_index.json` 用于本地目的地搜索；`navigation_graph.json` 用于本地 A* 路径规划。Godot 运行时导航不做任何外部 API 请求。
 
 ### 参数说明
 
@@ -153,6 +173,7 @@ output/
 ├── metadata.json              # 地理参考元数据
 ├── world_manifest.json        # streaming chunk manifest
 ├── navigation_index.json      # 道路/建筑轻量导航索引
+├── navigation_graph.json      # 本地可路由道路图
 ├── assets/                    # 生成资源，例如 cloud_billboard.png
 ├── materials/                 # toon-ish 材质资源
 │   ├── building_wall.tres
@@ -167,6 +188,7 @@ output/
 ├── scripts/                   # Godot 运行时脚本
 │   ├── chunk_mesh_loader.gd
 │   ├── world_streamer.gd
+│   ├── navigation_controller.gd
 │   └── fps_player.gd
 └── scenes/                    # 场景文件
     ├── master.tscn            # 主场景（天空、太阳、云、玩家、WorldStreamer）
@@ -187,6 +209,7 @@ output/
 - `Space`：跳跃
 - `Esc`：释放/捕获鼠标，左键点击可重新捕获
 - `V`：noclip 调试穿行模式，用于快速巡检大地图或绕过碰撞卡点
+- `N`：打开/关闭离线导航面板，搜索本地 index 中的道路或建筑目的地并开始导航
 
 玩家会优先出生在道路 mesh 上；如果输入映射在某些 Godot 环境中未被正确解析，脚本也会直接读取键盘按键作为 fallback。
 

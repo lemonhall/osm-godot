@@ -15,6 +15,7 @@
 pub mod chunk_grid;
 pub mod geometry;
 pub mod mesh_builder;
+pub mod navigation;
 pub mod project_writer;
 pub mod tres_writer;
 pub mod tscn_writer;
@@ -23,6 +24,7 @@ use crate::coordinate_system::cartesian::XZBBox;
 use crate::ground::Ground;
 use chunk_grid::{ChunkGrid, ElementMetadata, SceneElement};
 use geometry::MeshData;
+use navigation::NavigationGraphBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,6 +39,7 @@ pub struct SceneWriter {
     pub godot_scale: f32,
     pub stream_radius: i32,
     material_ids: HashMap<MaterialType, u32>,
+    navigation_graph: NavigationGraphBuilder,
 }
 
 impl SceneWriter {
@@ -64,6 +67,7 @@ impl SceneWriter {
             godot_scale,
             stream_radius: 2,
             material_ids,
+            navigation_graph: NavigationGraphBuilder::default(),
         }
     }
 
@@ -115,6 +119,16 @@ impl SceneWriter {
         );
     }
 
+    pub fn add_navigation_road(
+        &mut self,
+        osm_id: u64,
+        tags: &HashMap<String, String>,
+        centerline_arnis: &[(f32, f32)],
+    ) {
+        self.navigation_graph
+            .add_road(osm_id, tags, centerline_arnis, self.godot_scale);
+    }
+
     /// Add an instanced mesh (for trees, lamps, etc.) at the given world position.
     pub fn add_instance(
         &mut self,
@@ -160,6 +174,7 @@ impl SceneWriter {
         self.write_fps_player_script(&scripts_dir)?;
         self.write_chunk_mesh_loader_script(&scripts_dir)?;
         self.write_world_streamer_script(&scripts_dir)?;
+        self.write_navigation_controller_script(&scripts_dir)?;
 
         // Write each chunk scene
         let mut non_empty_count = 0u64;
@@ -175,6 +190,7 @@ impl SceneWriter {
         self.write_master_scene(&scenes_dir)?;
         self.write_world_manifest()?;
         self.write_navigation_index()?;
+        self.write_navigation_graph()?;
 
         // Write project files
         project_writer::write_project_file(&self.output_dir, "OSM Godot World")?;
@@ -207,7 +223,7 @@ impl SceneWriter {
 
         // load_steps = scripts/textures + scene subresources. Chunks are loaded at runtime
         // from world_manifest.json by world_streamer.gd.
-        let load_steps = 12;
+        let load_steps = 13;
         writeln!(
             f,
             "[gd_scene load_steps={load_steps} format=3 uid=\"uid://master000001\"]"
@@ -216,6 +232,7 @@ impl SceneWriter {
 
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/fps_player.gd\" id=\"player_script\"]")?;
         writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/world_streamer.gd\" id=\"streamer_script\"]")?;
+        writeln!(f, "[ext_resource type=\"Script\" path=\"res://scripts/navigation_controller.gd\" id=\"navigation_script\"]")?;
         writeln!(f, "[ext_resource type=\"Texture2D\" path=\"res://assets/cloud_billboard.png\" id=\"cloud_texture\"]")?;
         writeln!(f)?;
 
@@ -393,6 +410,14 @@ impl SceneWriter {
         writeln!(f, "unload_radius = {}", self.stream_radius.max(0) + 1)?;
         writeln!(f)?;
 
+        writeln!(
+            f,
+            "[node name=\"NavigationController\" type=\"Node3D\" parent=\".\"]"
+        )?;
+        writeln!(f, "script = ExtResource(\"navigation_script\")")?;
+        writeln!(f, "player_path = NodePath(\"../Player\")")?;
+        writeln!(f)?;
+
         Ok(())
     }
 
@@ -528,6 +553,13 @@ impl SceneWriter {
         std::fs::write(
             self.output_dir.join("navigation_index.json"),
             serde_json::to_string(&payload)?,
+        )
+    }
+
+    fn write_navigation_graph(&self) -> std::io::Result<()> {
+        std::fs::write(
+            self.output_dir.join("navigation_graph.json"),
+            serde_json::to_string(&self.navigation_graph.to_json_value())?,
         )
     }
 
@@ -969,6 +1001,498 @@ func _to_transform(values: Array) -> Transform3D:
         Ok(())
     }
 
+    fn write_navigation_controller_script(
+        &self,
+        scripts_dir: &std::path::Path,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = scripts_dir.join("navigation_controller.gd");
+        let mut f = std::fs::File::create(&path)?;
+
+        f.write_all(
+            r#"extends Node3D
+
+@export var player_path: NodePath = NodePath("../Player")
+@export var index_path := "res://navigation_index.json"
+@export var graph_path := "res://navigation_graph.json"
+@export var panel_toggle_key := KEY_N
+
+var player: Node3D = null
+var navigation_entries := []
+var graph_nodes := []
+var graph_edges := []
+var adjacency := {}
+var node_positions := {}
+var route_waypoints := []
+var route_total_distance := 0.0
+var current_instruction := ""
+var navigation_status := "idle"
+var destination_name := ""
+var last_spoken_instruction := ""
+
+var hud_layer: CanvasLayer = null
+var panel: PanelContainer = null
+var search_box: LineEdit = null
+var result_list: ItemList = null
+var instruction_label: Label = null
+var distance_label: Label = null
+var route_overlay: Node3D = null
+var route_line: MeshInstance3D = null
+var route_arrow: MeshInstance3D = null
+
+func _ready() -> void:
+	player = get_node_or_null(player_path) as Node3D
+	_load_navigation_data()
+	_build_runtime_nodes()
+	_build_hud()
+	_build_route_overlay()
+	set_process(true)
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == panel_toggle_key:
+		_toggle_panel()
+	if panel != null and panel.visible and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ENTER:
+		_start_from_ui_selection()
+
+func _process(_delta: float) -> void:
+	if not route_waypoints.is_empty():
+		_update_guidance()
+
+func start_navigation_to_query(query: String) -> bool:
+	if player == null:
+		player = get_node_or_null(player_path) as Node3D
+	var matches := search_destinations(query, 8)
+	if matches.is_empty() and query == "外滩":
+		matches = search_destinations("外滩源", 8)
+	if matches.is_empty():
+		navigation_status = "destination_not_found"
+		current_instruction = "Destination not found"
+		_update_hud()
+		return false
+	return _start_navigation_to_entry(matches[0])
+
+func search_destinations(query: String, limit := 12) -> Array:
+	var results := []
+	var needle := query.strip_edges().to_lower()
+	if needle.is_empty():
+		return results
+	for entry in navigation_entries:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		if _entry_matches(entry, needle):
+			results.append(entry)
+			if results.size() >= limit:
+				break
+	return results
+
+func get_route_waypoint_count() -> int:
+	return route_waypoints.size()
+
+func get_current_instruction() -> String:
+	return current_instruction
+
+func get_navigation_status() -> String:
+	return navigation_status
+
+func get_route_total_distance() -> float:
+	return route_total_distance
+
+func get_graph_node_count() -> int:
+	return graph_nodes.size()
+
+func get_graph_edge_count() -> int:
+	return graph_edges.size()
+
+func _load_navigation_data() -> void:
+	navigation_entries = _load_json_array(index_path, "entries")
+	var graph := _load_json_dict(graph_path)
+	graph_nodes = graph.get("nodes", [])
+	graph_edges = graph.get("edges", [])
+
+func _load_json_dict(path: String) -> Dictionary:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		push_error("Failed to open local navigation data: " + path)
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("Invalid local navigation data: " + path)
+		return {}
+	return parsed
+
+func _load_json_array(path: String, key: String) -> Array:
+	var data := _load_json_dict(path)
+	var value: Variant = data.get(key, [])
+	if typeof(value) != TYPE_ARRAY:
+		return []
+	return value
+
+func _build_runtime_nodes() -> void:
+	adjacency.clear()
+	node_positions.clear()
+	for node in graph_nodes:
+		if typeof(node) != TYPE_DICTIONARY:
+			continue
+		var id := str(node.get("id", ""))
+		var pos: Array = node.get("position", [])
+		if id.is_empty() or pos.size() < 2:
+			continue
+		node_positions[id] = Vector3(float(pos[0]), 0.2, float(pos[1]))
+		adjacency[id] = []
+	for edge in graph_edges:
+		if typeof(edge) != TYPE_DICTIONARY:
+			continue
+		var from_id := str(edge.get("from", ""))
+		var to_id := str(edge.get("to", ""))
+		if from_id.is_empty() or to_id.is_empty() or not adjacency.has(from_id):
+			continue
+		adjacency[from_id].append({
+			"to": to_id,
+			"cost": max(0.001, float(edge.get("cost", 1.0))),
+			"name": str(edge.get("name", "")),
+			"highway": str(edge.get("highway", "")),
+		})
+
+func _entry_matches(entry: Dictionary, needle: String) -> bool:
+	for key in ["name", "official_name", "alt_name", "old_name", "building", "highway", "amenity", "shop", "tourism", "addr:street"]:
+		if str(entry.get(key, "")).to_lower().contains(needle):
+			return true
+	return str(entry.get("osm_id", "")).contains(needle)
+
+func _start_navigation_to_entry(entry: Dictionary) -> bool:
+	if node_positions.is_empty() or adjacency.is_empty():
+		navigation_status = "graph_empty"
+		current_instruction = "Navigation graph is empty"
+		_update_hud()
+		return false
+	if player == null:
+		navigation_status = "player_not_found"
+		current_instruction = "Player not found"
+		_update_hud()
+		return false
+	var center: Array = entry.get("center", [])
+	if center.size() < 2:
+		navigation_status = "destination_missing_center"
+		current_instruction = "Destination has no center"
+		_update_hud()
+		return false
+	var start_candidates := _nearest_graph_nodes(player.global_position, 8, 80.0)
+	var goal_candidates := _nearest_graph_nodes(Vector3(float(center[0]), 0.0, float(center[1])), 16, 140.0)
+	if start_candidates.is_empty() or goal_candidates.is_empty():
+		navigation_status = "snap_failed"
+		current_instruction = "Could not snap to road"
+		_update_hud()
+		return false
+	var node_path := _find_best_route(start_candidates, goal_candidates)
+	if node_path.size() < 2:
+		navigation_status = "route_not_found"
+		current_instruction = "Route not found"
+		_update_hud()
+		return false
+	route_waypoints.clear()
+	for node_id in node_path:
+		route_waypoints.append(node_positions[str(node_id)])
+	route_total_distance = _route_distance(route_waypoints)
+	destination_name = _entry_display_name(entry)
+	navigation_status = "routing"
+	current_instruction = _instruction_for_segment(0)
+	_draw_route()
+	_update_guidance()
+	_speak_instruction(current_instruction)
+	return true
+
+func _nearest_graph_node(pos: Vector3) -> String:
+	var best_id := ""
+	var best_dist := INF
+	for id in node_positions.keys():
+		var node_pos: Vector3 = node_positions[id]
+		var dx := node_pos.x - pos.x
+		var dz := node_pos.z - pos.z
+		var dist := dx * dx + dz * dz
+		if dist < best_dist:
+			best_dist = dist
+			best_id = str(id)
+	return best_id
+
+func _nearest_graph_nodes(pos: Vector3, limit: int, max_distance: float) -> Array:
+	var remaining := []
+	for id in node_positions.keys():
+		var node_pos: Vector3 = node_positions[id]
+		var distance := Vector2(node_pos.x - pos.x, node_pos.z - pos.z).length()
+		if distance <= max_distance:
+			remaining.append({"id": str(id), "distance": distance})
+	if remaining.is_empty():
+		var fallback := _nearest_graph_node(pos)
+		if not fallback.is_empty():
+			remaining.append({"id": fallback, "distance": 0.0})
+	var results := []
+	while results.size() < limit and not remaining.is_empty():
+		var best_index := 0
+		var best_distance := float(remaining[0].get("distance", INF))
+		for i in range(1, remaining.size()):
+			var distance := float(remaining[i].get("distance", INF))
+			if distance < best_distance:
+				best_distance = distance
+				best_index = i
+		results.append(remaining[best_index])
+		remaining.remove_at(best_index)
+	return results
+
+func _find_best_route(start_candidates: Array, goal_candidates: Array) -> Array:
+	var best_path := []
+	var best_cost := INF
+	for start in start_candidates:
+		var start_id := str(start.get("id", ""))
+		if start_id.is_empty():
+			continue
+		for goal in goal_candidates:
+			var goal_id := str(goal.get("id", ""))
+			if goal_id.is_empty():
+				continue
+			var path := _find_route(start_id, goal_id)
+			if path.size() < 2:
+				continue
+			var cost := _path_cost(path) + float(start.get("distance", 0.0)) + float(goal.get("distance", 0.0))
+			if cost < best_cost:
+				best_cost = cost
+				best_path = path
+	return best_path
+
+func _find_route(start_id: String, goal_id: String) -> Array:
+	var open_set := [start_id]
+	var came_from := {}
+	var g_score := {start_id: 0.0}
+	var f_score := {start_id: _heuristic(start_id, goal_id)}
+	while not open_set.is_empty():
+		var current := _lowest_score_node(open_set, f_score)
+		if current == goal_id:
+			return _reconstruct_path(came_from, current)
+		open_set.erase(current)
+		for edge in adjacency.get(current, []):
+			var next_id := str(edge.get("to", ""))
+			if next_id.is_empty() or not node_positions.has(next_id):
+				continue
+			var tentative := float(g_score.get(current, INF)) + float(edge.get("cost", 1.0))
+			if tentative < float(g_score.get(next_id, INF)):
+				came_from[next_id] = current
+				g_score[next_id] = tentative
+				f_score[next_id] = tentative + _heuristic(next_id, goal_id)
+				if not open_set.has(next_id):
+					open_set.append(next_id)
+	return []
+
+func _path_cost(path: Array) -> float:
+	var total := 0.0
+	for i in range(1, path.size()):
+		var a := str(path[i - 1])
+		var b := str(path[i])
+		if node_positions.has(a) and node_positions.has(b):
+			total += node_positions[a].distance_to(node_positions[b])
+	return total
+
+func _lowest_score_node(open_set: Array, f_score: Dictionary) -> String:
+	var best := str(open_set[0])
+	var best_score := float(f_score.get(best, INF))
+	for value in open_set:
+		var id := str(value)
+		var score := float(f_score.get(id, INF))
+		if score < best_score:
+			best = id
+			best_score = score
+	return best
+
+func _heuristic(a: String, b: String) -> float:
+	if not node_positions.has(a) or not node_positions.has(b):
+		return 0.0
+	return node_positions[a].distance_to(node_positions[b])
+
+func _reconstruct_path(came_from: Dictionary, current: String) -> Array:
+	var total := [current]
+	while came_from.has(current):
+		current = str(came_from[current])
+		total.push_front(current)
+	return total
+
+func _route_distance(points: Array) -> float:
+	var total := 0.0
+	for i in range(1, points.size()):
+		total += (points[i - 1] as Vector3).distance_to(points[i] as Vector3)
+	return total
+
+func _instruction_for_segment(index: int) -> String:
+	if route_waypoints.size() < 2:
+		return ""
+	var i = clamp(index, 0, route_waypoints.size() - 2)
+	var next_pos: Vector3 = route_waypoints[i + 1]
+	var player_pos: Vector3 = player.global_position if player != null else route_waypoints[i]
+	var distance: float = player_pos.distance_to(next_pos)
+	var action := "Continue"
+	if i > 0 and i + 1 < route_waypoints.size():
+		var a: Vector3 = (route_waypoints[i] - route_waypoints[i - 1]).normalized()
+		var b: Vector3 = (route_waypoints[i + 1] - route_waypoints[i]).normalized()
+		var signed := rad_to_deg(atan2(a.x * b.z - a.z * b.x, a.x * b.x + a.z * b.z))
+		if signed > 35.0:
+			action = "Turn right"
+		elif signed < -35.0:
+			action = "Turn left"
+	return action + " in " + str(int(distance)) + " m"
+
+func _update_guidance() -> void:
+	if player == null or route_waypoints.size() < 2:
+		return
+	var nearest_index := 0
+	var nearest_dist := INF
+	for i in range(route_waypoints.size()):
+		var dist := player.global_position.distance_to(route_waypoints[i] as Vector3)
+		if dist < nearest_dist:
+			nearest_dist = dist
+			nearest_index = i
+	current_instruction = _instruction_for_segment(nearest_index)
+	_update_arrow(nearest_index)
+	_update_hud()
+	_speak_instruction(current_instruction)
+
+func _build_hud() -> void:
+	hud_layer = CanvasLayer.new()
+	hud_layer.name = "NavigationHUD"
+	add_child(hud_layer)
+	panel = PanelContainer.new()
+	panel.name = "NavigationPanel"
+	panel.visible = false
+	hud_layer.add_child(panel)
+	var box := VBoxContainer.new()
+	panel.add_child(box)
+	search_box = LineEdit.new()
+	search_box.placeholder_text = "Destination"
+	box.add_child(search_box)
+	result_list = ItemList.new()
+	result_list.custom_minimum_size = Vector2(300, 140)
+	box.add_child(result_list)
+	var start_button := Button.new()
+	start_button.text = "Start"
+	box.add_child(start_button)
+	instruction_label = Label.new()
+	instruction_label.name = "InstructionLabel"
+	instruction_label.text = "Navigation ready"
+	hud_layer.add_child(instruction_label)
+	distance_label = Label.new()
+	distance_label.name = "DistanceLabel"
+	distance_label.position = Vector2(0, 24)
+	hud_layer.add_child(distance_label)
+	search_box.text_changed.connect(_on_search_changed)
+	start_button.pressed.connect(_start_from_ui_selection)
+
+func _build_route_overlay() -> void:
+	route_overlay = Node3D.new()
+	route_overlay.name = "RouteOverlay"
+	add_child(route_overlay)
+	route_line = MeshInstance3D.new()
+	route_line.name = "RouteLine"
+	route_overlay.add_child(route_line)
+	route_arrow = MeshInstance3D.new()
+	route_arrow.name = "RouteArrow"
+	route_overlay.add_child(route_arrow)
+
+func _toggle_panel() -> void:
+	if panel == null:
+		return
+	panel.visible = not panel.visible
+	if panel.visible:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		search_box.grab_focus()
+	else:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+func _on_search_changed(text: String) -> void:
+	if result_list == null:
+		return
+	result_list.clear()
+	for entry in search_destinations(text, 12):
+		result_list.add_item(_entry_display_name(entry))
+		result_list.set_item_metadata(result_list.item_count - 1, entry)
+
+func _start_from_ui_selection() -> void:
+	if result_list == null or result_list.item_count == 0:
+		if search_box != null:
+			start_navigation_to_query(search_box.text)
+		return
+	var selected := result_list.get_selected_items()
+	var index := int(selected[0]) if selected.size() > 0 else 0
+	var entry = result_list.get_item_metadata(index)
+	if typeof(entry) == TYPE_DICTIONARY:
+		_start_navigation_to_entry(entry)
+
+func _entry_display_name(entry: Dictionary) -> String:
+	for key in ["name", "official_name", "alt_name", "addr:street", "building", "highway"]:
+		var value := str(entry.get(key, ""))
+		if not value.is_empty():
+			return value
+	return str(entry.get("osm_kind", "destination")) + " " + str(entry.get("osm_id", ""))
+
+func _draw_route() -> void:
+	if route_line == null:
+		return
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+	for point in route_waypoints:
+		var p: Vector3 = point
+		mesh.surface_add_vertex(Vector3(p.x, 0.35, p.z))
+	mesh.surface_end()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.82, 0.12, 1.0)
+	mesh.surface_set_material(0, material)
+	route_line.mesh = mesh
+	route_line.visible = true
+
+func _update_arrow(index: int) -> void:
+	if route_arrow == null or route_waypoints.size() < 2:
+		return
+	var i = clamp(index, 0, route_waypoints.size() - 2)
+	var a: Vector3 = route_waypoints[i]
+	var b: Vector3 = route_waypoints[i + 1]
+	var dir := (b - a).normalized()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.0
+	mesh.bottom_radius = 0.45
+	mesh.height = 1.4
+	route_arrow.mesh = mesh
+	route_arrow.global_position = Vector3(b.x, 1.0, b.z)
+	route_arrow.look_at(Vector3(b.x + dir.x, 1.0, b.z + dir.z), Vector3.UP)
+	route_arrow.rotate_object_local(Vector3.RIGHT, deg_to_rad(90.0))
+	route_arrow.visible = true
+
+func _update_hud() -> void:
+	if instruction_label != null:
+		instruction_label.text = current_instruction
+	if distance_label != null:
+		if route_total_distance > 0.0:
+			distance_label.text = destination_name + " " + str(int(route_total_distance)) + " m"
+		else:
+			distance_label.text = navigation_status
+
+func _speak_instruction(text: String) -> void:
+	if text.is_empty() or text == last_spoken_instruction:
+		return
+	last_spoken_instruction = text
+	if OS.has_feature("headless"):
+		return
+	if not DisplayServer.has_method("tts_speak"):
+		return
+	var voice := ""
+	if DisplayServer.has_method("tts_get_voices_for_language"):
+		var voices := DisplayServer.tts_get_voices_for_language("en")
+		if voices.size() > 0:
+			voice = str(voices[0])
+	DisplayServer.tts_speak(text, voice)
+"#
+            .as_bytes(),
+        )?;
+
+        Ok(())
+    }
+
     fn write_world_streamer_script(&self, scripts_dir: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
@@ -1246,14 +1770,47 @@ fn spawn_material_priority(material_type: MaterialType) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::coordinate_system::cartesian::XZBBox;
+    use crate::element_processing::highways;
     use crate::ground::Ground;
+    use crate::osm_parser::{ProcessedNode, ProcessedWay};
     use crate::scene_writer::geometry::MeshData;
+    use std::collections::HashMap;
 
     fn unit_mesh() -> MeshData {
         let mut mesh = MeshData::new();
         mesh.vertices
             .extend_from_slice(&[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]);
         mesh
+    }
+
+    fn test_road_way(id: u64) -> ProcessedWay {
+        let mut tags = HashMap::new();
+        tags.insert("highway".to_string(), "primary".to_string());
+        tags.insert("name".to_string(), "Navigation Test Road".to_string());
+        ProcessedWay {
+            id,
+            tags,
+            nodes: vec![
+                ProcessedNode {
+                    id: 1,
+                    tags: HashMap::new(),
+                    x: 32,
+                    z: 32,
+                },
+                ProcessedNode {
+                    id: 2,
+                    tags: HashMap::new(),
+                    x: 160,
+                    z: 32,
+                },
+                ProcessedNode {
+                    id: 3,
+                    tags: HashMap::new(),
+                    x: 160,
+                    z: 160,
+                },
+            ],
+        }
     }
 
     #[test]
@@ -1745,5 +2302,85 @@ mod tests {
             && e["name"] == "Streaming Test Road"
             && e["highway"] == "primary"
             && e["chunk"].is_array()));
+    }
+
+    #[test]
+    fn navigation_graph_is_written_from_highway_centerlines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let mut scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        highways::generate_highway(&mut scene, &test_road_way(300), 0.5);
+        scene.save_all().unwrap();
+
+        let graph_path = tmp.path().join("navigation_graph.json");
+        assert!(graph_path.exists(), "navigation_graph.json should be generated");
+        let graph: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(graph_path).unwrap()).unwrap();
+        let nodes = graph["nodes"].as_array().unwrap();
+        let edges = graph["edges"].as_array().unwrap();
+        assert!(nodes.len() >= 3, "expected centerline nodes, got {nodes:?}");
+        assert!(
+            edges.len() >= 4,
+            "expected bidirectional road edges, got {edges:?}"
+        );
+        assert!(edges.iter().any(|edge| edge["osm_id"] == "300"
+            && edge["highway"] == "primary"
+            && edge["name"] == "Navigation Test Road"
+            && edge["cost"].as_f64().unwrap_or_default() > 0.0));
+    }
+
+    #[test]
+    fn master_scene_mounts_navigation_controller() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let master =
+            std::fs::read_to_string(tmp.path().join("scenes").join("master.tscn")).unwrap();
+        assert!(master.contains(
+            "[ext_resource type=\"Script\" path=\"res://scripts/navigation_controller.gd\" id=\"navigation_script\"]"
+        ));
+        assert!(master.contains(
+            "[node name=\"NavigationController\" type=\"Node3D\" parent=\".\"]"
+        ));
+        assert!(master.contains("script = ExtResource(\"navigation_script\")"));
+        assert!(master.contains("player_path = NodePath(\"../Player\")"));
+        assert!(tmp
+            .path()
+            .join("scripts")
+            .join("navigation_controller.gd")
+            .exists());
+    }
+
+    #[test]
+    fn navigation_controller_uses_local_graph_and_has_no_network_api() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("func start_navigation_to_query(query: String) -> bool:"));
+        assert!(script.contains("navigation_index.json"));
+        assert!(script.contains("navigation_graph.json"));
+        assert!(script.contains("func _find_route"));
+        assert!(script.contains("func _nearest_graph_node"));
+        assert!(script.contains("last_spoken_instruction"));
+        for forbidden in ["HTTPRequest", "HTTPClient", "WebSocketPeer", "https://", "http://"] {
+            assert!(
+                !script.contains(forbidden),
+                "navigation must stay local and must not contain {forbidden}"
+            );
+        }
     }
 }

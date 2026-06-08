@@ -18,6 +18,7 @@ pub fn generate_highway(scene: &mut SceneWriter, way: &ProcessedWay, godot_scale
     // Centerline in arnis coords
     let centerline_arnis: Vec<(f32, f32)> =
         way.nodes.iter().map(|n| (n.x as f32, n.z as f32)).collect();
+    scene.add_navigation_road(way.id, &way.tags, &centerline_arnis);
 
     // Compute midpoint for world position reference
     let mid_idx = centerline_arnis.len() / 2;
