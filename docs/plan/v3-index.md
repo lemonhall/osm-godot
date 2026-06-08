@@ -13,7 +13,7 @@
 | M1 文档与验收冻结 | PRD-0003、v3 index、v3 计划 | 每条 REQ 都有计划、测试或 E2E；DoD 可二元判定 | `git diff --text -- docs` + 编码扫描 | done |
 | M2 本地路网图生成 | `navigation_graph.json` 从道路中心线生成 | graph 包含节点、边、road metadata、cost；项目根目录落盘 | `cargo test ... navigation` + `scene_writer` 测试 | done |
 | M3 运行时离线导航控制器 | 搜索、吸附、A*、路线状态 | `NavigationController` 能从 query 计算 route，不联网 | `cargo test ... scene_writer` + Godot E2E | done |
-| M4 指引 HUD 与绿色路线带 | UI、overlay、路线带 | HUD/overlay 节点存在，开始导航后可见绿色路线带；暂不做 marker 与语音 | Godot E2E | done |
+| M4 指引 HUD、绿色路线带与到达圈 | UI、overlay、路线带、到达圈 | HUD/overlay 节点存在，开始导航后可见绿色路线带和终点圈；进入终点圈后导航视觉全部清理；暂不做 marker 与语音 | Godot E2E | done |
 | M5 外滩导航样例与文档 | 生成 v7 外滩项目并回写 README | Godot import/E2E exit 0；README 有命令和路径 | 外滩 v7 导航工程 + README | done |
 
 ## Plan Index
@@ -57,12 +57,13 @@
 - 指引范围收窄：当前阶段先只保留高亮绿色路线带，暂缓路口 marker 与语音播报，避免半成品提示逻辑干扰漫游。
 - 开始导航稳定性修正：开始按钮使用稳定节点名和防重入状态，语音播报延后一帧触发，避免真实点击时按钮事件与系统 TTS 同栈执行。
 - 导航性能修正：导航激活后指引更新限频为 5Hz，3D 箭头 mesh 只初始化一次，运行时只更新 transform，避免每帧扫描路线并重建 mesh。
-- 导航视觉重做：移除浮空锥形箭头主导逻辑，改为 GTA/车载导航式绿色地面路线带；路线带使用 unshaded/emission、透明材质和 `no_depth_test` 提升可见性。
-- 导航触发降噪：当前阶段不再生成 `TurnMarkers`，不再调用 `DisplayServer.tts_speak`，`_update_guidance()` 只维护 HUD 的“沿绿色路线行驶”状态。
+- 导航视觉重做：移除浮空锥形箭头主导逻辑，改为 GTA/车载导航式绿色地面路线带和终点绿色到达圈；路线带与到达圈使用 unshaded/emission、透明材质和 `no_depth_test` 提升可见性。
+- 到达清理：玩家进入终点圈后，`_complete_navigation()` 会清空 route waypoints、隐藏路线带、隐藏到达圈，并隐藏导航 HUD 文本。
+- 导航触发降噪：当前阶段不再生成 `TurnMarkers`，不再调用 `DisplayServer.tts_speak`，`_update_guidance()` 只维护路线带、到达圈和 HUD 的基础状态。
 
 验证证据：
 
-- `cargo test --target-dir E:\tmp\osm-godot-target`：87 passed，1 ignored。
+- `cargo test --target-dir E:\tmp\osm-godot-target`：88 passed，1 ignored。
 - 外滩 v7 生成命令 exit 0，输出 `E:\tmp\osm-godot-shanghai-bund-v7-navigation`。
 - Godot import：`--headless --path E:\tmp\osm-godot-shanghai-bund-v7-navigation --import --quit` exit 0，无 `SCRIPT ERROR`。
-- 导航 E2E：`tools\godot_navigation_e2e.gd` headless 与非 headless 均 exit 0，日志包含 `panel_centered=true`、`controls_disabled=true`、`mouse_visible=true`、`graph_nodes=7711`、`graph_edges=29986`、`waypoint_count=74`、`total_distance=1148.37562561035`、`route_ribbon_exists=true`、`turn_markers_removed=true`、`status=routing`。
+- 导航 E2E：`tools\godot_navigation_e2e.gd` headless 与非 headless 均 exit 0，日志包含 `panel_centered=true`、`controls_disabled=true`、`mouse_visible=true`、`graph_nodes=7711`、`graph_edges=29986`、`waypoint_count=74`、`total_distance=1148.37562561035`、`route_ribbon_exists=true`、`destination_circle_visible=true`、`turn_markers_removed=true`、`arrived_status=true`、`cleared_waypoints=true`、`status=routing`。

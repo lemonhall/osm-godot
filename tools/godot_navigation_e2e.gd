@@ -86,6 +86,7 @@ func _run() -> void:
 	var hud := controller.get_node_or_null("NavigationHUD")
 	var overlay := controller.get_node_or_null("RouteOverlay")
 	var ribbon := controller.get_node_or_null("RouteOverlay/RouteRibbon")
+	var destination_circle := controller.get_node_or_null("RouteOverlay/DestinationCircle")
 	var turn_markers := controller.get_node_or_null("RouteOverlay/TurnMarkers")
 
 	print("NAV_E2E graph_nodes=", graph_nodes)
@@ -97,6 +98,8 @@ func _run() -> void:
 	print("NAV_E2E hud_exists=", hud != null)
 	print("NAV_E2E overlay_exists=", overlay != null)
 	print("NAV_E2E route_ribbon_exists=", ribbon != null)
+	print("NAV_E2E destination_circle_exists=", destination_circle != null)
+	print("NAV_E2E destination_circle_visible=", destination_circle != null and destination_circle.visible)
 	print("NAV_E2E turn_markers_removed=", turn_markers == null)
 
 	var failed := false
@@ -115,9 +118,30 @@ func _run() -> void:
 	if instruction.is_empty():
 		push_error("NAV_E2E instruction is empty")
 		failed = true
-	if hud == null or overlay == null or ribbon == null or turn_markers != null:
+	if hud == null or overlay == null or ribbon == null or destination_circle == null or not destination_circle.visible or turn_markers != null:
 		push_error("NAV_E2E missing navigation HUD or overlay nodes")
 		failed = true
+
+	if not failed:
+		var destination_position: Vector3 = controller.get("destination_position")
+		player.global_position = destination_position
+		controller.call("_update_guidance")
+		await process_frame
+		var arrived_status: bool = str(controller.call("get_navigation_status")) == "arrived"
+		var cleared_waypoints: bool = int(controller.call("get_route_waypoint_count")) == 0
+		var ribbon_hidden: bool = ribbon == null or not ribbon.visible
+		var circle_hidden: bool = destination_circle == null or not destination_circle.visible
+		var instruction_label: Label = controller.get("instruction_label") as Label
+		var distance_label: Label = controller.get("distance_label") as Label
+		var hud_hidden: bool = (instruction_label == null or not instruction_label.visible) and (distance_label == null or not distance_label.visible)
+		print("NAV_E2E arrived_status=", arrived_status)
+		print("NAV_E2E cleared_waypoints=", cleared_waypoints)
+		print("NAV_E2E ribbon_hidden_after_arrival=", ribbon_hidden)
+		print("NAV_E2E circle_hidden_after_arrival=", circle_hidden)
+		print("NAV_E2E hud_hidden_after_arrival=", hud_hidden)
+		if not arrived_status or not cleared_waypoints or not ribbon_hidden or not circle_hidden or not hud_hidden:
+			push_error("NAV_E2E arrival clear failed")
+			failed = true
 
 	quit(1 if failed else 0)
 

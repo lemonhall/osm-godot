@@ -1032,6 +1032,7 @@ func _to_transform(values: Array) -> Transform3D:
 @export var panel_toggle_key := KEY_N
 @export var guidance_update_interval := 0.2
 @export var route_ribbon_width := 2.4
+@export var arrival_radius := 5.0
 
 var player: Node3D = null
 var navigation_entries := []
@@ -1044,6 +1045,7 @@ var route_total_distance := 0.0
 var current_instruction := ""
 var navigation_status := "idle"
 var destination_name := ""
+var destination_position := Vector3.ZERO
 var guidance_update_accumulator := 0.0
 
 var hud_layer: CanvasLayer = null
@@ -1056,7 +1058,9 @@ var instruction_label: Label = null
 var distance_label: Label = null
 var route_overlay: Node3D = null
 var route_line: MeshInstance3D = null
+var destination_circle: MeshInstance3D = null
 var route_ribbon_material: StandardMaterial3D = null
+var destination_circle_material: StandardMaterial3D = null
 var navigation_start_in_progress := false
 
 func _ready() -> void:
@@ -1218,10 +1222,16 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 		route_waypoints.append(node_positions[str(node_id)])
 	route_total_distance = _route_distance(route_waypoints)
 	destination_name = _entry_display_name(entry)
+	destination_position = route_waypoints.back() as Vector3
 	navigation_status = "routing"
 	current_instruction = "沿绿色路线行驶"
+	if instruction_label != null:
+		instruction_label.visible = true
+	if distance_label != null:
+		distance_label.visible = true
 	guidance_update_accumulator = guidance_update_interval
 	_draw_route_ribbon()
+	_draw_destination_circle()
 	_update_guidance()
 	return true
 
@@ -1351,8 +1361,27 @@ func _instruction_for_segment(index: int) -> String:
 func _update_guidance() -> void:
 	if player == null or route_waypoints.size() < 2:
 		return
+	if player.global_position.distance_to(destination_position) <= arrival_radius:
+		_complete_navigation()
+		return
 	current_instruction = "沿绿色路线行驶"
 	_update_hud()
+
+func _complete_navigation() -> void:
+	navigation_status = "arrived"
+	route_waypoints.clear()
+	route_total_distance = 0.0
+	current_instruction = ""
+	destination_name = ""
+	if route_line != null:
+		route_line.visible = false
+		route_line.mesh = null
+	if destination_circle != null:
+		destination_circle.visible = false
+	if instruction_label != null:
+		instruction_label.visible = false
+	if distance_label != null:
+		distance_label.visible = false
 
 func _build_hud() -> void:
 	hud_layer = CanvasLayer.new()
@@ -1412,6 +1441,10 @@ func _build_route_overlay() -> void:
 	route_line = MeshInstance3D.new()
 	route_line.name = "RouteRibbon"
 	route_overlay.add_child(route_line)
+	destination_circle = MeshInstance3D.new()
+	destination_circle.name = "DestinationCircle"
+	destination_circle.visible = false
+	route_overlay.add_child(destination_circle)
 	route_ribbon_material = StandardMaterial3D.new()
 	route_ribbon_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	route_ribbon_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)
@@ -1421,6 +1454,15 @@ func _build_route_overlay() -> void:
 	route_ribbon_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	route_ribbon_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	route_ribbon_material.no_depth_test = true
+	destination_circle_material = StandardMaterial3D.new()
+	destination_circle_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	destination_circle_material.albedo_color = Color(0.0, 1.0, 0.18, 0.42)
+	destination_circle_material.emission_enabled = true
+	destination_circle_material.emission = Color(0.0, 1.0, 0.18, 1.0)
+	destination_circle_material.emission_energy_multiplier = 2.8
+	destination_circle_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	destination_circle_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	destination_circle_material.no_depth_test = true
 
 func _toggle_panel() -> void:
 	if panel == null:
@@ -1505,6 +1547,35 @@ func _draw_route_ribbon() -> void:
 	mesh.surface_set_material(0, route_ribbon_material)
 	route_line.mesh = mesh
 	route_line.visible = true
+
+func _draw_destination_circle() -> void:
+	if destination_circle == null:
+		return
+	destination_circle.mesh = _make_destination_circle_mesh(arrival_radius, 0.65)
+	destination_circle.material_override = destination_circle_material
+	destination_circle.position = Vector3(destination_position.x, 0.58, destination_position.z)
+	destination_circle.visible = true
+
+func _make_destination_circle_mesh(radius: float, thickness: float) -> Mesh:
+	var mesh := ImmediateMesh.new()
+	var segments: int = 72
+	var inner_radius: float = max(0.1, radius - thickness)
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(segments):
+		var a0: float = TAU * float(i) / float(segments)
+		var a1: float = TAU * float(i + 1) / float(segments)
+		var outer0: Vector3 = Vector3(cos(a0) * radius, 0.0, sin(a0) * radius)
+		var inner0: Vector3 = Vector3(cos(a0) * inner_radius, 0.0, sin(a0) * inner_radius)
+		var outer1: Vector3 = Vector3(cos(a1) * radius, 0.0, sin(a1) * radius)
+		var inner1: Vector3 = Vector3(cos(a1) * inner_radius, 0.0, sin(a1) * inner_radius)
+		mesh.surface_add_vertex(outer0)
+		mesh.surface_add_vertex(outer1)
+		mesh.surface_add_vertex(inner1)
+		mesh.surface_add_vertex(outer0)
+		mesh.surface_add_vertex(inner1)
+		mesh.surface_add_vertex(inner0)
+	mesh.surface_end()
+	return mesh
 
 func _draw_route_ribbon_segment(mesh: ImmediateMesh, a: Vector3, b: Vector3) -> void:
 	var delta := Vector2(b.x - a.x, b.z - a.z)
@@ -2448,6 +2519,10 @@ mod tests {
         assert!(script.contains("route_ribbon_material.emission_enabled = true"));
         assert!(script.contains("route_ribbon_material.no_depth_test = true"));
         assert!(script.contains("func _draw_route_ribbon() -> void:"));
+        assert!(script.contains("@export var arrival_radius := 5.0"));
+        assert!(script.contains("destination_circle.name = \"DestinationCircle\""));
+        assert!(script.contains("func _draw_destination_circle() -> void:"));
+        assert!(script.contains("func _make_destination_circle_mesh(radius: float, thickness: float) -> Mesh:"));
         assert!(!script.contains("TurnMarkers"));
         assert!(!script.contains("func _draw_turn_markers() -> void:"));
         assert!(!script.contains("func _maybe_queue_voice_for_maneuver"));
@@ -2477,6 +2552,29 @@ mod tests {
         assert!(update_guidance.contains("current_instruction = \"沿绿色路线行驶\""));
         assert!(!update_guidance.contains("_maybe_queue_voice_for_maneuver"));
         assert!(!update_guidance.contains("_queue_voice_instruction"));
+    }
+
+    #[test]
+    fn navigation_arrival_circle_clears_all_guidance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("if player.global_position.distance_to(destination_position) <= arrival_radius:"));
+        assert!(script.contains("_complete_navigation()"));
+        assert!(script.contains("func _complete_navigation() -> void:"));
+        assert!(script.contains("route_waypoints.clear()"));
+        assert!(script.contains("route_line.visible = false"));
+        assert!(script.contains("destination_circle.visible = false"));
+        assert!(script.contains("instruction_label.visible = false"));
+        assert!(script.contains("distance_label.visible = false"));
     }
 
     #[test]
