@@ -84,7 +84,7 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 
 ### 整个上海 streaming 示例
 
-整上海范围必须使用分片 Overpass 抓取和本地 tile cache。小 chunk 会产生过多文件；本机已验证通过的推荐组合是 `--chunk-size 512 --stream-radius 1`。它仍然生成完整上海 world package，但 Godot 运行时初始只加载玩家附近最多 `3x3` 个 chunk。
+整上海范围必须使用分片 Overpass 抓取和本地 tile cache。小 chunk 会产生过多文件；本机已验证通过的推荐组合是 `--chunk-size 512 --stream-radius 1`。它仍然生成完整上海 world package，但 Godot 运行时只请求玩家附近最多 `3x3` 个 chunk，并通过加载队列限制同时构建的 chunk 数。
 
 ```powershell
 $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897'; cargo run --release --target-dir E:\tmp\osm-godot-target-release -- --bbox "30.67,120.85,31.88,122.12" --output-dir E:\tmp\osm-godot-shanghai-city-v2-streaming-c512 --chunk-size 512 --stream-radius 1 --tiled-fetch --fetch-tile-degrees 0.25 --tile-cache-dir E:\tmp\osm-godot-cache\shanghai
@@ -101,8 +101,8 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - 场景元素：`1286786`
 - 非空区块：`33879`
 - 导航索引：`445340` 条道路/建筑记录
-- E2E：启动时 `loaded_initial=9`，移动到远处后 chunk 集合变化，且道路 OSM metadata 可读。
-- 性能探针：启动 9 个 chunk 覆盖 `5402` 个原始 element，但合批后只创建 `136` 个 `MeshInstance3D`；streamer 稳态刷新约 `7.05us`，不再每帧扫描全量 `33879` 个 chunk。
+- E2E：启动后按队列加载，移动到远处后 chunk 集合变化，且道路 OSM metadata 可读。
+- 性能探针：全上海初始请求 `9` 个 chunk，但同时只构建 `2` 个；探针点位显示 `pending_chunks=7`、`loading_chunks=2`、`mesh_instances=2`、`batch_element_total=71`，streamer 稳态刷新约 `4.04us`，不再每帧扫描全量 `33879` 个 chunk。
 
 ```powershell
 & 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-city-v2-streaming-c512 --script E:\development\osm-godot\tools\godot_streaming_perf_probe.gd
@@ -175,7 +175,7 @@ output/
     └── ...
 ```
 
-`chunk_mesh_loader.gd` 会按材质把同一 chunk 内的 mesh 合批成少量 `MeshInstance3D`，同时为道路/建筑保留轻量 metadata marker；`world_streamer.gd` 通过玩家坐标直接计算 chunk key，同一 chunk 内移动时不会重复扫描 manifest。
+`chunk_mesh_loader.gd` 会在线程中读取/解析 chunk JSON，再按每帧预算把同一 chunk 内的 mesh 合批成少量 `MeshInstance3D`，同时为道路/建筑保留轻量 metadata marker。`world_streamer.gd` 通过玩家坐标直接计算 chunk key，同一 chunk 内移动时不会重复扫描 manifest，并用 pending queue 与 `max_concurrent_chunk_loads` 避免跨 chunk 时同步构建多个大块。
 
 ## Godot 漫游控制
 

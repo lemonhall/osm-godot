@@ -746,27 +746,97 @@ impl SceneWriter {
             r#"extends Node3D
 
 @export var mesh_data_path := ""
+@export var load_budget_usec := 2500
+
+var load_thread: Thread = null
+var load_state := "idle"
+var pending_elements: Array = []
+var pending_element_index := 0
+var batches := {}
+var batch_keys := []
+var batch_index := 0
 
 func _ready() -> void:
-	_load_meshes()
+	set_meta("chunk_loading_complete", false)
+	_begin_threaded_load()
 
-func _load_meshes() -> void:
+func _exit_tree() -> void:
+	if load_thread != null and load_thread.is_started():
+		load_thread.wait_to_finish()
+
+func _process(_delta: float) -> void:
+	if load_state == "reading":
+		_collect_thread_result()
+	elif load_state == "batching":
+		_process_pending_elements()
+	elif load_state == "creating":
+		_process_pending_batches()
+
+func _begin_threaded_load() -> void:
 	_clear_generated_children()
+	pending_elements.clear()
+	pending_element_index = 0
+	batches.clear()
+	batch_keys.clear()
+	batch_index = 0
 	if mesh_data_path.is_empty():
+		_finish_loading()
 		return
+	load_thread = Thread.new()
+	load_state = "reading"
+	var err := load_thread.start(Callable(self, "_load_mesh_data_thread"))
+	if err != OK:
+		push_error("Failed to start chunk load thread: " + str(err))
+		_finish_loading()
+
+func _load_mesh_data_thread() -> Dictionary:
 	var file := FileAccess.open(mesh_data_path, FileAccess.READ)
 	if file == null:
-		push_error("Failed to open mesh data: " + mesh_data_path)
-		return
+		return {"ok": false, "error": "Failed to open mesh data: " + mesh_data_path}
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	if typeof(parsed) != TYPE_DICTIONARY:
-		push_error("Invalid mesh data: " + mesh_data_path)
+		return {"ok": false, "error": "Invalid mesh data: " + mesh_data_path}
+	return {"ok": true, "elements": parsed.get("elements", [])}
+
+func _collect_thread_result() -> void:
+	if load_thread == null or load_thread.is_alive():
 		return
-	var batches := {}
-	for element in parsed.get("elements", []):
-		_add_element_to_batch(element, batches)
-	for material_name in batches.keys():
-		_create_batch_instance(str(material_name), batches[material_name])
+	var result: Variant = load_thread.wait_to_finish()
+	load_thread = null
+	if typeof(result) != TYPE_DICTIONARY or not bool(result.get("ok", false)):
+		push_error(str(result.get("error", "Failed to load chunk mesh data")))
+		_finish_loading()
+		return
+	pending_elements = result.get("elements", [])
+	pending_element_index = 0
+	load_state = "batching"
+
+func _process_pending_elements() -> void:
+	var start: int = Time.get_ticks_usec()
+	while pending_element_index < pending_elements.size():
+		_add_element_to_batch(pending_elements[pending_element_index], batches)
+		pending_element_index += 1
+		if Time.get_ticks_usec() - start >= load_budget_usec:
+			return
+	pending_elements.clear()
+	batch_keys = batches.keys()
+	batch_index = 0
+	load_state = "creating"
+
+func _process_pending_batches() -> void:
+	var start: int = Time.get_ticks_usec()
+	while batch_index < batch_keys.size():
+		var material_name := str(batch_keys[batch_index])
+		_create_batch_instance(material_name, batches[material_name])
+		batch_index += 1
+		if Time.get_ticks_usec() - start >= load_budget_usec:
+			return
+	_finish_loading()
+
+func _finish_loading() -> void:
+	load_state = "complete"
+	set_meta("chunk_loading_complete", true)
+	set_process(false)
 
 func _clear_generated_children() -> void:
 	for child in get_children():
@@ -851,103 +921,49 @@ func _add_metadata_marker(element: Dictionary, transform: Transform3D) -> void:
 	_apply_metadata(marker, metadata)
 	add_child(marker)
 	marker.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+
+func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:
+	var body := StaticBody3D.new()
+	body.name = source_name + "_Collision"
+	body.transform = source_transform
+	body.set_meta("osm_generated", true)
+	var shape := CollisionShape3D.new()
+	shape.shape = mesh.create_trimesh_shape()
+	body.add_child(shape)
+	add_child(body)
+	body.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+	shape.owner = body.owner
+
+func _apply_metadata(node: Node, metadata: Variant) -> void:
+	if typeof(metadata) != TYPE_DICTIONARY:
+		return
+	node.set_meta("osm_metadata", metadata)
+	for key in metadata.keys():
+		node.set_meta(StringName(_sanitize_meta_key(str(key))), metadata[key])
+
+func _sanitize_meta_key(key: String) -> String:
+	var out := key
+	out = out.replace(":", "_")
+	out = out.replace("-", "_")
+	out = out.replace(".", "_")
+	out = out.replace(" ", "_")
+	return out
+
+func _should_add_collision(material_name: String) -> bool:
+	return (
+		material_name.begins_with("terrain_")
+	)
+
+func _to_transform(values: Array) -> Transform3D:
+	if values.size() < 12:
+		return Transform3D.IDENTITY
+	return Transform3D(Basis(
+		Vector3(float(values[0]), float(values[1]), float(values[2])),
+		Vector3(float(values[3]), float(values[4]), float(values[5])),
+		Vector3(float(values[6]), float(values[7]), float(values[8]))
+	), Vector3(float(values[9]), float(values[10]), float(values[11])))
 "#
             .as_bytes(),
-        )?;
-        writeln!(f)?;
-        writeln!(f, "func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:")?;
-        writeln!(f, "\tvar body := StaticBody3D.new()")?;
-        writeln!(f, "\tbody.name = source_name + \"_Collision\"")?;
-        writeln!(f, "\tbody.transform = source_transform")?;
-        writeln!(f, "\tbody.set_meta(\"osm_generated\", true)")?;
-        writeln!(f, "\tvar shape := CollisionShape3D.new()")?;
-        writeln!(f, "\tshape.shape = mesh.create_trimesh_shape()")?;
-        writeln!(f, "\tbody.add_child(shape)")?;
-        writeln!(f, "\tadd_child(body)")?;
-        writeln!(
-            f,
-            "\tbody.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner"
-        )?;
-        writeln!(f, "\tshape.owner = body.owner")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "func _apply_metadata(node: Node, metadata: Variant) -> void:"
-        )?;
-        writeln!(f, "\tif typeof(metadata) != TYPE_DICTIONARY:")?;
-        writeln!(f, "\t\treturn")?;
-        writeln!(f, "\tnode.set_meta(\"osm_metadata\", metadata)")?;
-        writeln!(f, "\tfor key in metadata.keys():")?;
-        writeln!(
-            f,
-            "\t\tnode.set_meta(StringName(_sanitize_meta_key(str(key))), metadata[key])"
-        )?;
-        writeln!(f)?;
-        writeln!(f, "func _sanitize_meta_key(key: String) -> String:")?;
-        writeln!(f, "\tvar out := key")?;
-        writeln!(f, "\tout = out.replace(\":\", \"_\")")?;
-        writeln!(f, "\tout = out.replace(\"-\", \"_\")")?;
-        writeln!(f, "\tout = out.replace(\".\", \"_\")")?;
-        writeln!(f, "\tout = out.replace(\" \", \"_\")")?;
-        writeln!(f, "\treturn out")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "func _should_add_collision(material_name: String) -> bool:"
-        )?;
-        writeln!(f, "\treturn (")?;
-        writeln!(f, "\t\tmaterial_name.begins_with(\"terrain_\")")?;
-        writeln!(f, "\t)")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "func _to_vec3_array(values: Array) -> PackedVector3Array:"
-        )?;
-        writeln!(f, "\tvar out := PackedVector3Array()")?;
-        writeln!(f, "\tfor i in range(0, values.size() - 2, 3):")?;
-        writeln!(
-            f,
-            "\t\tout.append(Vector3(float(values[i]), float(values[i + 1]), float(values[i + 2])))"
-        )?;
-        writeln!(f, "\treturn out")?;
-        writeln!(f)?;
-        writeln!(
-            f,
-            "func _to_vec2_array(values: Array) -> PackedVector2Array:"
-        )?;
-        writeln!(f, "\tvar out := PackedVector2Array()")?;
-        writeln!(f, "\tfor i in range(0, values.size() - 1, 2):")?;
-        writeln!(
-            f,
-            "\t\tout.append(Vector2(float(values[i]), float(values[i + 1])))"
-        )?;
-        writeln!(f, "\treturn out")?;
-        writeln!(f)?;
-        writeln!(f, "func _to_int_array(values: Array) -> PackedInt32Array:")?;
-        writeln!(f, "\tvar out := PackedInt32Array()")?;
-        writeln!(f, "\tfor value in values:")?;
-        writeln!(f, "\t\tout.append(int(value))")?;
-        writeln!(f, "\treturn out")?;
-        writeln!(f)?;
-        writeln!(f, "func _to_transform(values: Array) -> Transform3D:")?;
-        writeln!(f, "\tif values.size() < 12:")?;
-        writeln!(f, "\t\treturn Transform3D.IDENTITY")?;
-        writeln!(f, "\treturn Transform3D(Basis(")?;
-        writeln!(
-            f,
-            "\t\tVector3(float(values[0]), float(values[1]), float(values[2])),"
-        )?;
-        writeln!(
-            f,
-            "\t\tVector3(float(values[3]), float(values[4]), float(values[5])),"
-        )?;
-        writeln!(
-            f,
-            "\t\tVector3(float(values[6]), float(values[7]), float(values[8]))"
-        )?;
-        writeln!(
-            f,
-            "\t), Vector3(float(values[9]), float(values[10]), float(values[11])))"
         )?;
 
         Ok(())
@@ -966,10 +982,14 @@ func _add_metadata_marker(element: Dictionary, transform: Transform3D) -> void:
 @export var player_path: NodePath = NodePath("../Player")
 @export var stream_radius := {stream_radius}
 @export var unload_radius := {unload_radius}
+@export var max_concurrent_chunk_loads := 2
 
 var manifest := {{}}
 var chunk_entries := {{}}
 var loaded_chunks := {{}}
+var pending_chunk_keys := []
+var pending_chunk_lookup := {{}}
+var loading_chunk_keys := {{}}
 var player: Node3D = null
 var chunk_size_blocks := 1.0
 var godot_scale := 1.0
@@ -982,6 +1002,9 @@ func _ready() -> void:
 
 func _physics_process(_delta: float) -> void:
 	_refresh_streaming()
+
+func _process(_delta: float) -> void:
+	_drain_load_queue()
 
 func _load_manifest() -> void:
 	var file := FileAccess.open(manifest_path, FileAccess.READ)
@@ -1022,12 +1045,26 @@ func _refresh_streaming() -> void:
 			var key := _chunk_key(cx, cz)
 			if chunk_entries.has(key):
 				keep[key] = true
-				_load_chunk(key)
+				_request_chunk(key)
 	_unload_far_chunks(current, keep)
+	_drain_load_queue()
 
-func _load_chunk(key: String) -> void:
-	if loaded_chunks.has(key):
+func _request_chunk(key: String) -> void:
+	if loaded_chunks.has(key) or pending_chunk_lookup.has(key):
 		return
+	pending_chunk_lookup[key] = true
+	pending_chunk_keys.append(key)
+
+func _drain_load_queue() -> void:
+	_prune_finished_loading()
+	while loading_chunk_keys.size() < max_concurrent_chunk_loads and not pending_chunk_keys.is_empty():
+		var key := str(pending_chunk_keys.pop_front())
+		pending_chunk_lookup.erase(key)
+		if loaded_chunks.has(key) or not chunk_entries.has(key):
+			continue
+		_start_chunk_load(key)
+
+func _start_chunk_load(key: String) -> void:
 	var entry: Dictionary = chunk_entries[key]
 	var packed := load(str(entry.get("scene_path", ""))) as PackedScene
 	if packed == null:
@@ -1040,10 +1077,23 @@ func _load_chunk(key: String) -> void:
 	instance.set_meta("streamed_chunk", true)
 	add_child(instance)
 	loaded_chunks[key] = instance
+	loading_chunk_keys[key] = true
+
+func _prune_finished_loading() -> void:
+	for key in loading_chunk_keys.keys():
+		if not loaded_chunks.has(key):
+			loading_chunk_keys.erase(key)
+			continue
+		var node: Node = loaded_chunks[key]
+		if node.get_meta("chunk_loading_complete", false):
+			loading_chunk_keys.erase(key)
 
 func _unload_far_chunks(current: Array, keep: Dictionary) -> void:
+	_prune_pending_queue(keep)
 	for key in loaded_chunks.keys():
 		if keep.has(key):
+			continue
+		if loading_chunk_keys.has(key):
 			continue
 		var coord: Array = _parse_chunk_key(key)
 		if coord.size() < 2:
@@ -1053,6 +1103,16 @@ func _unload_far_chunks(current: Array, keep: Dictionary) -> void:
 			var node: Node = loaded_chunks[key]
 			loaded_chunks.erase(key)
 			node.queue_free()
+
+func _prune_pending_queue(keep: Dictionary) -> void:
+	var next_pending := []
+	pending_chunk_lookup.clear()
+	for key in pending_chunk_keys:
+		var key_string := str(key)
+		if keep.has(key_string):
+			next_pending.append(key_string)
+			pending_chunk_lookup[key_string] = true
+	pending_chunk_keys = next_pending
 
 func _find_player_chunk(pos: Vector3) -> Array:
 	var coord := _coord_from_position(pos)
@@ -1538,6 +1598,26 @@ mod tests {
     }
 
     #[test]
+    fn chunk_loader_uses_threaded_incremental_loading_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
+                .unwrap();
+        assert!(script.contains("@export var load_budget_usec"));
+        assert!(script.contains("Thread.new()"));
+        assert!(script.contains("func _load_mesh_data_thread() -> Dictionary:"));
+        assert!(script.contains("func _process(_delta: float) -> void:"));
+        assert!(script.contains("Time.get_ticks_usec() - start >= load_budget_usec"));
+        assert!(script.contains("set_meta(\"chunk_loading_complete\", true)"));
+    }
+
+    #[test]
     fn world_streaming_manifest_and_master_do_not_static_load_chunks() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(1400.0, 1400.0).unwrap();
@@ -1597,13 +1677,17 @@ mod tests {
             std::fs::read_to_string(tmp.path().join("scripts").join("world_streamer.gd")).unwrap();
         assert!(script.contains("@export var stream_radius"));
         assert!(script.contains("@export var unload_radius"));
-        assert!(script.contains("func _load_chunk"));
+        assert!(script.contains("func _start_chunk_load"));
         assert!(script.contains("func _unload_far_chunks"));
         assert!(script.contains("world_manifest.json"));
         assert!(script.contains("loaded_chunks"));
         assert!(script.contains("last_player_chunk_key"));
         assert!(script.contains("func _coord_from_position(pos: Vector3) -> Array:"));
         assert!(script.contains("chunk_size_blocks"));
+        assert!(script.contains("@export var max_concurrent_chunk_loads"));
+        assert!(script.contains("var pending_chunk_keys := []"));
+        assert!(script.contains("func _request_chunk(key: String) -> void:"));
+        assert!(script.contains("func _drain_load_queue() -> void:"));
         assert!(!script.contains("for key in chunk_entries.keys():"));
     }
 

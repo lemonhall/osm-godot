@@ -27,6 +27,7 @@ func _run() -> void:
 	if streamer == null:
 		_fail("missing_world_streamer")
 		return
+	await _wait_for_initial_stream_content(streamer)
 
 	var manifest: Dictionary = streamer.get("manifest")
 	var loaded_chunks: Dictionary = streamer.get("loaded_chunks")
@@ -149,6 +150,13 @@ func _count_road_mesh_instances(node: Node) -> int:
 	for child: Node in node.get_children():
 		count += _count_road_mesh_instances(child)
 	return count
+
+func _wait_for_initial_stream_content(streamer: Node) -> void:
+	for i in range(420):
+		if _find_first_node_with_osm_meta(streamer) != null and _count_road_mesh_instances(streamer) > 0:
+			return
+		await process_frame
+		await physics_frame
 
 func _measure_move(player: CharacterBody3D, spawn_position: Vector3) -> float:
 	player.global_position = spawn_position

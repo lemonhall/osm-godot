@@ -21,13 +21,18 @@ func _run() -> void:
 	if streamer == null:
 		_fail("missing_world_streamer")
 		return
+	await _wait_for_any_batch(streamer)
 
 	var loaded_chunks: Dictionary = streamer.get("loaded_chunks")
+	var pending_chunk_keys: Array = streamer.get("pending_chunk_keys")
+	var loading_chunk_keys: Dictionary = streamer.get("loading_chunk_keys")
 	var counts: Dictionary = _count_streamed_nodes(streamer)
 	var refresh_usec: float = _measure_refresh_usec(streamer, 300)
 	var max_mesh_instances: int = max(loaded_chunks.size() * 64, 1)
 
 	print("STREAM_PERF loaded_chunks=", loaded_chunks.size())
+	print("STREAM_PERF pending_chunks=", pending_chunk_keys.size())
+	print("STREAM_PERF loading_chunks=", loading_chunk_keys.size())
 	print("STREAM_PERF mesh_instances=", counts["mesh_instances"])
 	print("STREAM_PERF batch_element_total=", counts["batch_element_total"])
 	print("STREAM_PERF metadata_nodes=", counts["metadata_nodes"])
@@ -49,6 +54,14 @@ func _run() -> void:
 		failed = true
 
 	quit(1 if failed else 0)
+
+func _wait_for_any_batch(streamer: Node) -> void:
+	for i in range(420):
+		var counts: Dictionary = _count_streamed_nodes(streamer)
+		if int(counts["batch_element_total"]) > 0:
+			return
+		await process_frame
+		await physics_frame
 
 func _count_streamed_nodes(node: Node) -> Dictionary:
 	var counts: Dictionary = {
