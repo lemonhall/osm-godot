@@ -45,7 +45,7 @@ v2 已经把大范围城市拆成 streaming chunk，并生成 `navigation_index.
 ### REQ-0003-004: 游戏内路线线条、方向箭头和指引 HUD
 
 - **Motivation**：玩家需要在 3D 城市里看到“往哪走”和“下一步干什么”。
-- **Scope**：在 `master.tscn` 中挂载 `NavigationController` 和 `CanvasLayer` UI；路线用世界线条/箭头可视化；HUD 显示目的地、剩余距离、下一步转向文字、搜索框和候选列表；快捷键打开/关闭面板。
+- **Scope**：在 `master.tscn` 中挂载 `NavigationController` 和 `CanvasLayer` UI；当前阶段路线只用连续绿色世界线条可视化；HUD 显示目的地、路线状态、搜索框和候选列表；快捷键打开/关闭面板。路口 marker 与语音播报暂缓。
 - **Non-goals**：不做完整手机地图 UI，不做小地图、不做车辆仪表盘。
 - **Acceptance**：Godot E2E 证明 `NavigationController`、HUD 节点、route overlay 节点存在；开始导航后路线节点包含可见 mesh，HUD 指令文字非空。
 

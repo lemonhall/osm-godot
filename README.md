@@ -96,7 +96,7 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - 路网图：`7711` 个节点、`29986` 条边
 - 导航 E2E：从出生点搜索“外滩/外滩源”，生成 `74` 个 waypoint，路线距离约 `1148m`
 - 导航 UI：按 `N` 后面板居中，释放鼠标并暂停 FPS 控制；点击“取消”恢复鼠标捕获和玩家控制。
-- 语音提示：项目启用 Godot 本机 TTS，优先选择中文系统 voice；不可用或 headless 时只显示 HUD 文本。
+- 路线指引：当前阶段只保留连续绿色路线带，先不生成路口 marker，也不触发语音播报。
 - Godot 验证：
   ```powershell
   & 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-bund-v7-navigation --import --quit

@@ -85,8 +85,8 @@ func _run() -> void:
 	var instruction := str(controller.call("get_current_instruction"))
 	var hud := controller.get_node_or_null("NavigationHUD")
 	var overlay := controller.get_node_or_null("RouteOverlay")
-	var line := controller.get_node_or_null("RouteOverlay/RouteLine")
-	var arrow := controller.get_node_or_null("RouteOverlay/RouteArrow")
+	var ribbon := controller.get_node_or_null("RouteOverlay/RouteRibbon")
+	var turn_markers := controller.get_node_or_null("RouteOverlay/TurnMarkers")
 
 	print("NAV_E2E graph_nodes=", graph_nodes)
 	print("NAV_E2E graph_edges=", graph_edges)
@@ -96,8 +96,8 @@ func _run() -> void:
 	print("NAV_E2E status=", controller.call("get_navigation_status"))
 	print("NAV_E2E hud_exists=", hud != null)
 	print("NAV_E2E overlay_exists=", overlay != null)
-	print("NAV_E2E route_line_exists=", line != null)
-	print("NAV_E2E route_arrow_exists=", arrow != null)
+	print("NAV_E2E route_ribbon_exists=", ribbon != null)
+	print("NAV_E2E turn_markers_removed=", turn_markers == null)
 
 	var failed := false
 	if graph_nodes <= 0:
@@ -115,7 +115,7 @@ func _run() -> void:
 	if instruction.is_empty():
 		push_error("NAV_E2E instruction is empty")
 		failed = true
-	if hud == null or overlay == null or line == null or arrow == null:
+	if hud == null or overlay == null or ribbon == null or turn_markers != null:
 		push_error("NAV_E2E missing navigation HUD or overlay nodes")
 		failed = true
 

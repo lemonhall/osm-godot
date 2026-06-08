@@ -1030,6 +1030,8 @@ func _to_transform(values: Array) -> Transform3D:
 @export var index_path := "res://navigation_index.json"
 @export var graph_path := "res://navigation_graph.json"
 @export var panel_toggle_key := KEY_N
+@export var guidance_update_interval := 0.2
+@export var route_ribbon_width := 2.4
 
 var player: Node3D = null
 var navigation_entries := []
@@ -1042,7 +1044,7 @@ var route_total_distance := 0.0
 var current_instruction := ""
 var navigation_status := "idle"
 var destination_name := ""
-var last_spoken_instruction := ""
+var guidance_update_accumulator := 0.0
 
 var hud_layer: CanvasLayer = null
 var panel: PanelContainer = null
@@ -1054,11 +1056,8 @@ var instruction_label: Label = null
 var distance_label: Label = null
 var route_overlay: Node3D = null
 var route_line: MeshInstance3D = null
-var route_arrow: MeshInstance3D = null
-var route_arrow_material: StandardMaterial3D = null
+var route_ribbon_material: StandardMaterial3D = null
 var navigation_start_in_progress := false
-var pending_voice_instruction := ""
-var voice_call_deferred := false
 
 func _ready() -> void:
 	player = get_node_or_null(player_path) as Node3D
@@ -1074,9 +1073,14 @@ func _input(event: InputEvent) -> void:
 	if panel != null and panel.visible and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ENTER:
 		_start_from_ui_selection()
 
-func _process(_delta: float) -> void:
-	if not route_waypoints.is_empty():
-		_update_guidance()
+func _process(delta: float) -> void:
+	if route_waypoints.is_empty():
+		return
+	guidance_update_accumulator += delta
+	if guidance_update_accumulator < guidance_update_interval:
+		return
+	guidance_update_accumulator = 0.0
+	_update_guidance()
 
 func start_navigation_to_query(query: String) -> bool:
 	if player == null:
@@ -1215,8 +1219,9 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	route_total_distance = _route_distance(route_waypoints)
 	destination_name = _entry_display_name(entry)
 	navigation_status = "routing"
-	current_instruction = _instruction_for_segment(0)
-	_draw_route()
+	current_instruction = "沿绿色路线行驶"
+	guidance_update_accumulator = guidance_update_interval
+	_draw_route_ribbon()
 	_update_guidance()
 	return true
 
@@ -1341,35 +1346,13 @@ func _route_distance(points: Array) -> float:
 func _instruction_for_segment(index: int) -> String:
 	if route_waypoints.size() < 2:
 		return ""
-	var i = clamp(index, 0, route_waypoints.size() - 2)
-	var next_pos: Vector3 = route_waypoints[i + 1]
-	var player_pos: Vector3 = player.global_position if player != null else route_waypoints[i]
-	var distance: float = player_pos.distance_to(next_pos)
-	var action := "继续直行"
-	if i > 0 and i + 1 < route_waypoints.size():
-		var a: Vector3 = (route_waypoints[i] - route_waypoints[i - 1]).normalized()
-		var b: Vector3 = (route_waypoints[i + 1] - route_waypoints[i]).normalized()
-		var signed := rad_to_deg(atan2(a.x * b.z - a.z * b.x, a.x * b.x + a.z * b.z))
-		if signed > 35.0:
-			action = "右转"
-		elif signed < -35.0:
-			action = "左转"
-	return str(int(distance)) + " 米后" + action
+	return "沿绿色路线行驶"
 
 func _update_guidance() -> void:
 	if player == null or route_waypoints.size() < 2:
 		return
-	var nearest_index := 0
-	var nearest_dist := INF
-	for i in range(route_waypoints.size()):
-		var dist := player.global_position.distance_to(route_waypoints[i] as Vector3)
-		if dist < nearest_dist:
-			nearest_dist = dist
-			nearest_index = i
-	current_instruction = _instruction_for_segment(nearest_index)
-	_update_arrow(nearest_index)
+	current_instruction = "沿绿色路线行驶"
 	_update_hud()
-	_queue_voice_instruction(current_instruction)
 
 func _build_hud() -> void:
 	hud_layer = CanvasLayer.new()
@@ -1410,6 +1393,8 @@ func _build_hud() -> void:
 	buttons.add_child(start_navigation_button)
 	instruction_label = Label.new()
 	instruction_label.name = "InstructionLabel"
+	instruction_label.position = Vector2(82, 24)
+	instruction_label.add_theme_font_size_override("font_size", 24)
 	instruction_label.text = "导航就绪"
 	hud_layer.add_child(instruction_label)
 	distance_label = Label.new()
@@ -1425,18 +1410,17 @@ func _build_route_overlay() -> void:
 	route_overlay.name = "RouteOverlay"
 	add_child(route_overlay)
 	route_line = MeshInstance3D.new()
-	route_line.name = "RouteLine"
+	route_line.name = "RouteRibbon"
 	route_overlay.add_child(route_line)
-	route_arrow = MeshInstance3D.new()
-	route_arrow.name = "RouteArrow"
-	route_arrow_material = StandardMaterial3D.new()
-	route_arrow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	route_arrow_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)
-	route_arrow_material.emission_enabled = true
-	route_arrow_material.emission = Color(0.0, 1.0, 0.18, 1.0)
-	route_arrow_material.emission_energy_multiplier = 2.8
-	route_arrow.material_override = route_arrow_material
-	route_overlay.add_child(route_arrow)
+	route_ribbon_material = StandardMaterial3D.new()
+	route_ribbon_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	route_ribbon_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)
+	route_ribbon_material.emission_enabled = true
+	route_ribbon_material.emission = Color(0.0, 1.0, 0.18, 1.0)
+	route_ribbon_material.emission_energy_multiplier = 2.4
+	route_ribbon_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	route_ribbon_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	route_ribbon_material.no_depth_test = true
 
 func _toggle_panel() -> void:
 	if panel == null:
@@ -1508,38 +1492,36 @@ func _entry_display_name(entry: Dictionary) -> String:
 			return value
 	return str(entry.get("osm_kind", "destination")) + " " + str(entry.get("osm_id", ""))
 
-func _draw_route() -> void:
+func _draw_route_ribbon() -> void:
 	if route_line == null:
 		return
 	var mesh := ImmediateMesh.new()
-	mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
-	for point in route_waypoints:
-		var p: Vector3 = point
-		mesh.surface_add_vertex(Vector3(p.x, 0.35, p.z))
+	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(1, route_waypoints.size()):
+		var a: Vector3 = route_waypoints[i - 1]
+		var b: Vector3 = route_waypoints[i]
+		_draw_route_ribbon_segment(mesh, a, b)
 	mesh.surface_end()
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color(1.0, 0.82, 0.12, 1.0)
-	mesh.surface_set_material(0, material)
+	mesh.surface_set_material(0, route_ribbon_material)
 	route_line.mesh = mesh
 	route_line.visible = true
 
-func _update_arrow(index: int) -> void:
-	if route_arrow == null or route_waypoints.size() < 2:
+func _draw_route_ribbon_segment(mesh: ImmediateMesh, a: Vector3, b: Vector3) -> void:
+	var delta := Vector2(b.x - a.x, b.z - a.z)
+	if delta.length() < 0.01:
 		return
-	var i = clamp(index, 0, route_waypoints.size() - 2)
-	var a: Vector3 = route_waypoints[i]
-	var b: Vector3 = route_waypoints[i + 1]
-	var dir := (b - a).normalized()
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = 0.0
-	mesh.bottom_radius = 0.8
-	mesh.height = 2.4
-	route_arrow.mesh = mesh
-	route_arrow.global_position = Vector3(b.x, 1.6, b.z)
-	route_arrow.look_at(Vector3(b.x + dir.x, 1.6, b.z + dir.z), Vector3.UP)
-	route_arrow.rotate_object_local(Vector3.RIGHT, deg_to_rad(90.0))
-	route_arrow.visible = true
+	var normal := Vector2(-delta.y, delta.x).normalized() * (route_ribbon_width * 0.5)
+	var y := 0.42
+	var a_left := Vector3(a.x + normal.x, y, a.z + normal.y)
+	var a_right := Vector3(a.x - normal.x, y, a.z - normal.y)
+	var b_left := Vector3(b.x + normal.x, y, b.z + normal.y)
+	var b_right := Vector3(b.x - normal.x, y, b.z - normal.y)
+	mesh.surface_add_vertex(a_left)
+	mesh.surface_add_vertex(b_left)
+	mesh.surface_add_vertex(b_right)
+	mesh.surface_add_vertex(a_left)
+	mesh.surface_add_vertex(b_right)
+	mesh.surface_add_vertex(a_right)
 
 func _update_hud() -> void:
 	if instruction_label != null:
@@ -1550,42 +1532,6 @@ func _update_hud() -> void:
 		else:
 			distance_label.text = navigation_status
 
-func _speak_instruction(text: String) -> void:
-	if text.is_empty() or text == last_spoken_instruction:
-		return
-	last_spoken_instruction = text
-	if DisplayServer.get_name() == "headless":
-		return
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH):
-		return
-	var voice := _select_tts_voice()
-	DisplayServer.tts_speak(text, voice, 50, 1.0, 1.0, 0, true)
-
-func _queue_voice_instruction(text: String) -> void:
-	if text.is_empty() or text == last_spoken_instruction:
-		return
-	pending_voice_instruction = text
-	if voice_call_deferred:
-		return
-	voice_call_deferred = true
-	call_deferred("_flush_voice_instruction")
-
-func _flush_voice_instruction() -> void:
-	voice_call_deferred = false
-	var text := pending_voice_instruction
-	pending_voice_instruction = ""
-	_speak_instruction(text)
-
-func _select_tts_voice() -> String:
-	if not DisplayServer.has_method("tts_get_voices_for_language"):
-		return ""
-	var voices := DisplayServer.tts_get_voices_for_language("zh")
-	if voices.size() > 0:
-		return str(voices[0])
-	voices = DisplayServer.tts_get_voices_for_language("en")
-	if voices.size() > 0:
-		return str(voices[0])
-	return ""
 "#
             .as_bytes(),
         )?;
@@ -2475,7 +2421,7 @@ mod tests {
         assert!(script.contains("navigation_graph.json"));
         assert!(script.contains("func _find_route"));
         assert!(script.contains("func _nearest_graph_node"));
-        assert!(script.contains("last_spoken_instruction"));
+        assert!(!script.contains("DisplayServer.tts_speak"));
         for forbidden in ["HTTPRequest", "HTTPClient", "WebSocketPeer", "https://", "http://"] {
             assert!(
                 !script.contains(forbidden),
@@ -2485,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_controller_uses_bright_green_arrow_and_native_tts() {
+    fn navigation_controller_uses_only_bright_green_route_ribbon() {
         let tmp = tempfile::tempdir().unwrap();
         let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
         let ground = Arc::new(Ground::new_flat(0));
@@ -2497,16 +2443,40 @@ mod tests {
             tmp.path().join("scripts").join("navigation_controller.gd"),
         )
         .unwrap();
-        assert!(script.contains("route_arrow_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)"));
-        assert!(script.contains("route_arrow_material.emission_enabled = true"));
-        assert!(script.contains("route_arrow.material_override = route_arrow_material"));
-        assert!(script.contains("func _select_tts_voice() -> String:"));
-        assert!(script.contains("func _queue_voice_instruction(text: String) -> void:"));
-        assert!(script.contains("call_deferred(\"_flush_voice_instruction\")"));
-        assert!(script.contains("DisplayServer.tts_get_voices_for_language(\"zh\")"));
-        assert!(script.contains("DisplayServer.get_name() == \"headless\""));
-        assert!(script.contains("DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH)"));
-        assert!(script.contains("DisplayServer.tts_speak(text, voice, 50, 1.0, 1.0, 0, true)"));
+        assert!(script.contains("@export var route_ribbon_width := 2.4"));
+        assert!(script.contains("route_ribbon_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)"));
+        assert!(script.contains("route_ribbon_material.emission_enabled = true"));
+        assert!(script.contains("route_ribbon_material.no_depth_test = true"));
+        assert!(script.contains("func _draw_route_ribbon() -> void:"));
+        assert!(!script.contains("TurnMarkers"));
+        assert!(!script.contains("func _draw_turn_markers() -> void:"));
+        assert!(!script.contains("func _maybe_queue_voice_for_maneuver"));
+        assert!(!script.contains("DisplayServer.tts_speak"));
+    }
+
+    #[test]
+    fn navigation_guidance_does_not_use_markers_or_voice_prompts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(!script.contains("turn_marker_root"));
+        assert!(!script.contains("turn_arrow_meshes"));
+        assert!(!script.contains("spoken_maneuver_alerts"));
+
+        let update_guidance_start = script.find("func _update_guidance() -> void:").unwrap();
+        let build_hud_start = script.find("func _build_hud() -> void:").unwrap();
+        let update_guidance = &script[update_guidance_start..build_hud_start];
+        assert!(update_guidance.contains("current_instruction = \"沿绿色路线行驶\""));
+        assert!(!update_guidance.contains("_maybe_queue_voice_for_maneuver"));
+        assert!(!update_guidance.contains("_queue_voice_instruction"));
     }
 
     #[test]
@@ -2556,5 +2526,30 @@ mod tests {
         assert!(navigation_script.contains("_set_player_controls_enabled(false)"));
         assert!(navigation_script.contains("_set_player_controls_enabled(true)"));
         assert!(navigation_script.contains("player.call(\"set_controls_enabled\", enabled)"));
+    }
+
+    #[test]
+    fn navigation_guidance_is_throttled_and_route_visuals_are_static() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("@export var guidance_update_interval := 0.2"));
+        assert!(script.contains("guidance_update_accumulator += delta"));
+        assert!(script.contains("if guidance_update_accumulator < guidance_update_interval:"));
+        assert!(script.contains("_draw_route_ribbon()"));
+        assert!(!script.contains("func _update_arrow(index: int) -> void:"));
+        let update_arrow_start = script.find("func _update_guidance() -> void:").unwrap();
+        let update_hud_start = script.find("func _build_hud() -> void:").unwrap();
+        let update_guidance = &script[update_arrow_start..update_hud_start];
+        assert!(!update_guidance.contains("CylinderMesh.new()"));
+        assert!(!update_guidance.contains("ImmediateMesh.new()"));
     }
 }
