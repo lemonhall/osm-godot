@@ -25,10 +25,51 @@ func _run() -> void:
 	if controller == null:
 		_fail("missing_navigation_controller")
 		return
+	controller.call("_toggle_panel")
+	await process_frame
+	var panel: Control = controller.get_node_or_null("NavigationHUD/NavigationPanel")
+	var controls_disabled := bool(player.get("controls_enabled")) == false
+	var panel_centered := panel != null and is_equal_approx(panel.anchor_left, 0.5) and is_equal_approx(panel.anchor_top, 0.5)
+	var mouse_visible := Input.get_mouse_mode() == Input.MOUSE_MODE_VISIBLE
+	print("NAV_E2E panel_visible=", panel != null and panel.visible)
+	print("NAV_E2E panel_centered=", panel_centered)
+	print("NAV_E2E controls_disabled=", controls_disabled)
+	print("NAV_E2E mouse_visible=", mouse_visible)
+	if panel == null or not panel.visible or not panel_centered or not controls_disabled or not mouse_visible:
+		_fail("navigation_panel_focus_failed")
+		return
+	controller.call("_cancel_navigation_panel")
+	await process_frame
+	var controls_restored := bool(player.get("controls_enabled")) == true
+	var mouse_captured := Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED
+	print("NAV_E2E controls_restored=", controls_restored)
+	print("NAV_E2E mouse_captured=", mouse_captured)
+	var display_is_headless := DisplayServer.get_name() == "headless"
+	print("NAV_E2E display_is_headless=", display_is_headless)
+	if panel.visible or not controls_restored or (not display_is_headless and not mouse_captured):
+		_fail("navigation_panel_cancel_failed")
+		return
 
-	var ok: bool = controller.call("start_navigation_to_query", "外滩")
-	if not ok:
-		ok = controller.call("start_navigation_to_query", "外滩源")
+	controller.call("_toggle_panel")
+	await process_frame
+	var search_box: LineEdit = controller.get("search_box") as LineEdit
+	if search_box == null:
+		_fail("missing_search_box")
+		return
+	search_box.text = "外滩"
+	controller.call("_on_search_changed", search_box.text)
+	await process_frame
+	var start_button: Button = controller.get("start_navigation_button") as Button
+	if start_button == null:
+		_fail("missing_start_button")
+		return
+	start_button.emit_signal("pressed")
+	await process_frame
+	if panel.visible or bool(player.get("controls_enabled")) == false:
+		_fail("navigation_ui_start_failed_to_close_panel")
+		return
+
+	var ok := str(controller.call("get_navigation_status")) == "routing"
 	if not ok:
 		_fail("route_start_failed status=" + str(controller.call("get_navigation_status")))
 		return

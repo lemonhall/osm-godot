@@ -652,6 +652,7 @@ impl SceneWriter {
         )?;
         writeln!(f, "var noclip := false")?;
         writeln!(f, "var look_enabled := true")?;
+        writeln!(f, "var controls_enabled := true")?;
         writeln!(f)?;
         writeln!(f, "@onready var camera: Camera3D = $Camera3D")?;
         writeln!(
@@ -664,6 +665,8 @@ impl SceneWriter {
         writeln!(f, "\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
         writeln!(f)?;
         writeln!(f, "func _input(event: InputEvent) -> void:")?;
+        writeln!(f, "\tif not controls_enabled:")?;
+        writeln!(f, "\t\treturn")?;
         writeln!(f, "\tif event.is_action_pressed(\"mouse_capture_toggle\"):")?;
         writeln!(f, "\t\tif look_enabled:")?;
         writeln!(f, "\t\t\tlook_enabled = false")?;
@@ -689,6 +692,9 @@ impl SceneWriter {
         )?;
         writeln!(f)?;
         writeln!(f, "func _physics_process(delta: float) -> void:")?;
+        writeln!(f, "\tif not controls_enabled:")?;
+        writeln!(f, "\t\tvelocity = Vector3.ZERO")?;
+        writeln!(f, "\t\treturn")?;
         writeln!(f, "\tvar input_dir := _movement_input_vector()")?;
         writeln!(f, "\tvar direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()")?;
         writeln!(f, "\tvar speed := move_speed")?;
@@ -764,6 +770,13 @@ impl SceneWriter {
         writeln!(f, "\t\treturn false")?;
         writeln!(f, "\tvar key_event := event as InputEventKey")?;
         writeln!(f, "\treturn key_event.pressed and not key_event.echo and (key_event.keycode == key or key_event.physical_keycode == key)")?;
+        writeln!(f)?;
+        writeln!(f, "func set_controls_enabled(enabled: bool) -> void:")?;
+        writeln!(f, "\tcontrols_enabled = enabled")?;
+        writeln!(f, "\tlook_enabled = enabled")?;
+        writeln!(f, "\tvelocity = Vector3.ZERO")?;
+        writeln!(f, "\tif enabled:")?;
+        writeln!(f, "\t\tInput.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)")?;
 
         Ok(())
     }
@@ -1035,11 +1048,17 @@ var hud_layer: CanvasLayer = null
 var panel: PanelContainer = null
 var search_box: LineEdit = null
 var result_list: ItemList = null
+var cancel_navigation_button: Button = null
+var start_navigation_button: Button = null
 var instruction_label: Label = null
 var distance_label: Label = null
 var route_overlay: Node3D = null
 var route_line: MeshInstance3D = null
 var route_arrow: MeshInstance3D = null
+var route_arrow_material: StandardMaterial3D = null
+var navigation_start_in_progress := false
+var pending_voice_instruction := ""
+var voice_call_deferred := false
 
 func _ready() -> void:
 	player = get_node_or_null(player_path) as Node3D
@@ -1199,7 +1218,6 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	current_instruction = _instruction_for_segment(0)
 	_draw_route()
 	_update_guidance()
-	_speak_instruction(current_instruction)
 	return true
 
 func _nearest_graph_node(pos: Vector3) -> String:
@@ -1327,16 +1345,16 @@ func _instruction_for_segment(index: int) -> String:
 	var next_pos: Vector3 = route_waypoints[i + 1]
 	var player_pos: Vector3 = player.global_position if player != null else route_waypoints[i]
 	var distance: float = player_pos.distance_to(next_pos)
-	var action := "Continue"
+	var action := "继续直行"
 	if i > 0 and i + 1 < route_waypoints.size():
 		var a: Vector3 = (route_waypoints[i] - route_waypoints[i - 1]).normalized()
 		var b: Vector3 = (route_waypoints[i + 1] - route_waypoints[i]).normalized()
 		var signed := rad_to_deg(atan2(a.x * b.z - a.z * b.x, a.x * b.x + a.z * b.z))
 		if signed > 35.0:
-			action = "Turn right"
+			action = "右转"
 		elif signed < -35.0:
-			action = "Turn left"
-	return action + " in " + str(int(distance)) + " m"
+			action = "左转"
+	return str(int(distance)) + " 米后" + action
 
 func _update_guidance() -> void:
 	if player == null or route_waypoints.size() < 2:
@@ -1351,7 +1369,7 @@ func _update_guidance() -> void:
 	current_instruction = _instruction_for_segment(nearest_index)
 	_update_arrow(nearest_index)
 	_update_hud()
-	_speak_instruction(current_instruction)
+	_queue_voice_instruction(current_instruction)
 
 func _build_hud() -> void:
 	hud_layer = CanvasLayer.new()
@@ -1360,28 +1378,47 @@ func _build_hud() -> void:
 	panel = PanelContainer.new()
 	panel.name = "NavigationPanel"
 	panel.visible = false
+	panel.anchor_left = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -220.0
+	panel.offset_top = -170.0
+	panel.offset_right = 220.0
+	panel.offset_bottom = 170.0
 	hud_layer.add_child(panel)
 	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(420, 320)
 	panel.add_child(box)
 	search_box = LineEdit.new()
-	search_box.placeholder_text = "Destination"
+	search_box.placeholder_text = "搜索目的地"
 	box.add_child(search_box)
 	result_list = ItemList.new()
-	result_list.custom_minimum_size = Vector2(300, 140)
+	result_list.custom_minimum_size = Vector2(420, 220)
 	box.add_child(result_list)
-	var start_button := Button.new()
-	start_button.text = "Start"
-	box.add_child(start_button)
+	var buttons := HBoxContainer.new()
+	box.add_child(buttons)
+	cancel_navigation_button = Button.new()
+	cancel_navigation_button.name = "CancelNavigationButton"
+	cancel_navigation_button.text = "取消"
+	cancel_navigation_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	buttons.add_child(cancel_navigation_button)
+	start_navigation_button = Button.new()
+	start_navigation_button.name = "StartNavigationButton"
+	start_navigation_button.text = "开始导航"
+	start_navigation_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	buttons.add_child(start_navigation_button)
 	instruction_label = Label.new()
 	instruction_label.name = "InstructionLabel"
-	instruction_label.text = "Navigation ready"
+	instruction_label.text = "导航就绪"
 	hud_layer.add_child(instruction_label)
 	distance_label = Label.new()
 	distance_label.name = "DistanceLabel"
 	distance_label.position = Vector2(0, 24)
 	hud_layer.add_child(distance_label)
 	search_box.text_changed.connect(_on_search_changed)
-	start_button.pressed.connect(_start_from_ui_selection)
+	cancel_navigation_button.pressed.connect(_cancel_navigation_panel)
+	start_navigation_button.pressed.connect(_start_from_ui_selection)
 
 func _build_route_overlay() -> void:
 	route_overlay = Node3D.new()
@@ -1392,17 +1429,43 @@ func _build_route_overlay() -> void:
 	route_overlay.add_child(route_line)
 	route_arrow = MeshInstance3D.new()
 	route_arrow.name = "RouteArrow"
+	route_arrow_material = StandardMaterial3D.new()
+	route_arrow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	route_arrow_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)
+	route_arrow_material.emission_enabled = true
+	route_arrow_material.emission = Color(0.0, 1.0, 0.18, 1.0)
+	route_arrow_material.emission_energy_multiplier = 2.8
+	route_arrow.material_override = route_arrow_material
 	route_overlay.add_child(route_arrow)
 
 func _toggle_panel() -> void:
 	if panel == null:
 		return
-	panel.visible = not panel.visible
-	if panel.visible:
+	_set_panel_visible(not panel.visible)
+
+func _set_panel_visible(visible: bool) -> void:
+	if panel == null:
+		return
+	panel.visible = visible
+	if visible:
+		navigation_start_in_progress = false
+		if start_navigation_button != null:
+			start_navigation_button.disabled = false
+		_set_player_controls_enabled(false)
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		search_box.grab_focus()
 	else:
+		_set_player_controls_enabled(true)
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+func _set_player_controls_enabled(enabled: bool) -> void:
+	if player == null:
+		player = get_node_or_null(player_path) as Node3D
+	if player != null and player.has_method("set_controls_enabled"):
+		player.call("set_controls_enabled", enabled)
+
+func _cancel_navigation_panel() -> void:
+	_set_panel_visible(false)
 
 func _on_search_changed(text: String) -> void:
 	if result_list == null:
@@ -1413,15 +1476,30 @@ func _on_search_changed(text: String) -> void:
 		result_list.set_item_metadata(result_list.item_count - 1, entry)
 
 func _start_from_ui_selection() -> void:
+	if navigation_start_in_progress:
+		return
+	navigation_start_in_progress = true
+	if start_navigation_button != null:
+		start_navigation_button.disabled = true
+	var started := false
 	if result_list == null or result_list.item_count == 0:
 		if search_box != null:
-			start_navigation_to_query(search_box.text)
+			started = start_navigation_to_query(search_box.text)
+		_finish_navigation_start(started)
 		return
 	var selected := result_list.get_selected_items()
 	var index := int(selected[0]) if selected.size() > 0 else 0
 	var entry = result_list.get_item_metadata(index)
 	if typeof(entry) == TYPE_DICTIONARY:
-		_start_navigation_to_entry(entry)
+		started = _start_navigation_to_entry(entry)
+	_finish_navigation_start(started)
+
+func _finish_navigation_start(started: bool) -> void:
+	navigation_start_in_progress = false
+	if started:
+		_set_panel_visible(false)
+	elif start_navigation_button != null:
+		start_navigation_button.disabled = false
 
 func _entry_display_name(entry: Dictionary) -> String:
 	for key in ["name", "official_name", "alt_name", "addr:street", "building", "highway"]:
@@ -1455,11 +1533,11 @@ func _update_arrow(index: int) -> void:
 	var dir := (b - a).normalized()
 	var mesh := CylinderMesh.new()
 	mesh.top_radius = 0.0
-	mesh.bottom_radius = 0.45
-	mesh.height = 1.4
+	mesh.bottom_radius = 0.8
+	mesh.height = 2.4
 	route_arrow.mesh = mesh
-	route_arrow.global_position = Vector3(b.x, 1.0, b.z)
-	route_arrow.look_at(Vector3(b.x + dir.x, 1.0, b.z + dir.z), Vector3.UP)
+	route_arrow.global_position = Vector3(b.x, 1.6, b.z)
+	route_arrow.look_at(Vector3(b.x + dir.x, 1.6, b.z + dir.z), Vector3.UP)
 	route_arrow.rotate_object_local(Vector3.RIGHT, deg_to_rad(90.0))
 	route_arrow.visible = true
 
@@ -1476,16 +1554,38 @@ func _speak_instruction(text: String) -> void:
 	if text.is_empty() or text == last_spoken_instruction:
 		return
 	last_spoken_instruction = text
-	if OS.has_feature("headless"):
+	if DisplayServer.get_name() == "headless":
 		return
-	if not DisplayServer.has_method("tts_speak"):
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH):
 		return
-	var voice := ""
-	if DisplayServer.has_method("tts_get_voices_for_language"):
-		var voices := DisplayServer.tts_get_voices_for_language("en")
-		if voices.size() > 0:
-			voice = str(voices[0])
-	DisplayServer.tts_speak(text, voice)
+	var voice := _select_tts_voice()
+	DisplayServer.tts_speak(text, voice, 50, 1.0, 1.0, 0, true)
+
+func _queue_voice_instruction(text: String) -> void:
+	if text.is_empty() or text == last_spoken_instruction:
+		return
+	pending_voice_instruction = text
+	if voice_call_deferred:
+		return
+	voice_call_deferred = true
+	call_deferred("_flush_voice_instruction")
+
+func _flush_voice_instruction() -> void:
+	voice_call_deferred = false
+	var text := pending_voice_instruction
+	pending_voice_instruction = ""
+	_speak_instruction(text)
+
+func _select_tts_voice() -> String:
+	if not DisplayServer.has_method("tts_get_voices_for_language"):
+		return ""
+	var voices := DisplayServer.tts_get_voices_for_language("zh")
+	if voices.size() > 0:
+		return str(voices[0])
+	voices = DisplayServer.tts_get_voices_for_language("en")
+	if voices.size() > 0:
+		return str(voices[0])
+	return ""
 "#
             .as_bytes(),
         )?;
@@ -2382,5 +2482,79 @@ mod tests {
                 "navigation must stay local and must not contain {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn navigation_controller_uses_bright_green_arrow_and_native_tts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("route_arrow_material.albedo_color = Color(0.0, 1.0, 0.18, 1.0)"));
+        assert!(script.contains("route_arrow_material.emission_enabled = true"));
+        assert!(script.contains("route_arrow.material_override = route_arrow_material"));
+        assert!(script.contains("func _select_tts_voice() -> String:"));
+        assert!(script.contains("func _queue_voice_instruction(text: String) -> void:"));
+        assert!(script.contains("call_deferred(\"_flush_voice_instruction\")"));
+        assert!(script.contains("DisplayServer.tts_get_voices_for_language(\"zh\")"));
+        assert!(script.contains("DisplayServer.get_name() == \"headless\""));
+        assert!(script.contains("DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH)"));
+        assert!(script.contains("DisplayServer.tts_speak(text, voice, 50, 1.0, 1.0, 0, true)"));
+    }
+
+    #[test]
+    fn navigation_panel_is_centered_with_cancel_and_start_actions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(script.contains("panel.anchor_left = 0.5"));
+        assert!(script.contains("panel.anchor_top = 0.5"));
+        assert!(script.contains("panel.offset_left = -220.0"));
+        assert!(script.contains("search_box.placeholder_text = \"搜索目的地\""));
+        assert!(script.contains("cancel_navigation_button.name = \"CancelNavigationButton\""));
+        assert!(script.contains("cancel_navigation_button.text = \"取消\""));
+        assert!(script.contains("start_navigation_button.name = \"StartNavigationButton\""));
+        assert!(script.contains("start_navigation_button.text = \"开始导航\""));
+        assert!(script.contains("start_navigation_button.disabled = true"));
+        assert!(script.contains("navigation_start_in_progress"));
+        assert!(script.contains("cancel_navigation_button.pressed.connect(_cancel_navigation_panel)"));
+    }
+
+    #[test]
+    fn navigation_panel_disables_fps_controls_while_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 128, 0.5);
+
+        scene.save_all().unwrap();
+
+        let player_script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("fps_player.gd")).unwrap();
+        let navigation_script = std::fs::read_to_string(
+            tmp.path().join("scripts").join("navigation_controller.gd"),
+        )
+        .unwrap();
+        assert!(player_script.contains("var controls_enabled := true"));
+        assert!(player_script.contains("func set_controls_enabled(enabled: bool) -> void:"));
+        assert!(player_script.contains("if not controls_enabled:"));
+        assert!(navigation_script.contains("_set_player_controls_enabled(false)"));
+        assert!(navigation_script.contains("_set_player_controls_enabled(true)"));
+        assert!(navigation_script.contains("player.call(\"set_controls_enabled\", enabled)"));
     }
 }

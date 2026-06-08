@@ -27,8 +27,8 @@
 | REQ-0003-001 | PRD-0003 §REQ-0003-001 | v3-internal-navigation §Step 1-4 | `navigation_graph_is_written_from_highway_centerlines` | 外滩导航 E2E graph load | v7 graph `7711` nodes / `29986` edges | done |
 | REQ-0003-002 | PRD-0003 §REQ-0003-002 | v3-internal-navigation §Step 1-4 | `navigation_controller_uses_local_graph_and_has_no_network_api` | `start_navigation_to_query("外滩")` | E2E status `routing` | done |
 | REQ-0003-003 | PRD-0003 §REQ-0003-003 | v3-internal-navigation §Step 1-4 | graph snap/A* 脚本内容测试 | route waypoint + distance | E2E `waypoint_count=74`，`total_distance=1148.3756` | done |
-| REQ-0003-004 | PRD-0003 §REQ-0003-004 | v3-internal-navigation §Step 1-4 | `master_scene_mounts_navigation_controller` | overlay/HUD 节点断言 | E2E `hud_exists=true`、`route_line_exists=true`、`route_arrow_exists=true` | done |
-| REQ-0003-005 | PRD-0003 §REQ-0003-005 | v3-internal-navigation §Step 1-4 | TTS guard 内容测试 | headless E2E 不报错 | E2E headless exit 0，`instruction=Continue in 11 m` | done |
+| REQ-0003-004 | PRD-0003 §REQ-0003-004 | v3-internal-navigation §Step 1-4 | `master_scene_mounts_navigation_controller` + 导航面板 UI 测试 | overlay/HUD 节点断言 + 面板焦点 E2E | E2E `panel_centered=true`、`controls_disabled=true`、`route_arrow_exists=true` | done |
+| REQ-0003-005 | PRD-0003 §REQ-0003-005 | v3-internal-navigation §Step 1-4 | TTS guard 内容测试 | headless E2E 不报错 | E2E headless exit 0，脚本启用 `DisplayServer.tts_speak` 并优先中文 voice | done |
 | REQ-0003-006 | PRD-0003 §REQ-0003-006 | v3-internal-navigation §Step 5-7 | 全量 cargo test | 外滩 v7 Godot import/E2E | `E:\tmp\osm-godot-shanghai-bund-v7-navigation` import/E2E exit 0 | done |
 
 ## ECN Index
@@ -53,10 +53,13 @@
 - 导航目的地吸附不再只选最近节点；若最近节点落在孤立小分量，会尝试多个近邻路网节点并选择可连通路线。
 - 生成期为几何上接近但未共享 OSM 节点的道路加入近邻连接边，避免交叉口数据轻微断裂导致 `route_not_found`。
 - 外滩 v7 导航样例已生成并通过 Godot 4.6 headless import/E2E。
+- 导航面板交互修正：面板居中，按钮为“取消 / 开始导航”，打开时释放鼠标并暂停 FPS 控制，关闭后恢复。
+- 指引可视化和播报修正：路线箭头改为高亮绿色 unshaded/emission 材质，提示文案改为中文，并通过 Godot 本机 TTS 播报。
+- 开始导航稳定性修正：开始按钮使用稳定节点名和防重入状态，语音播报延后一帧触发，避免真实点击时按钮事件与系统 TTS 同栈执行。
 
 验证证据：
 
-- `cargo test --target-dir E:\tmp\osm-godot-target`：81 passed，1 ignored。
+- `cargo test --target-dir E:\tmp\osm-godot-target`：85 passed，1 ignored。
 - 外滩 v7 生成命令 exit 0，输出 `E:\tmp\osm-godot-shanghai-bund-v7-navigation`。
 - Godot import：`--headless --path E:\tmp\osm-godot-shanghai-bund-v7-navigation --import --quit` exit 0，无 `SCRIPT ERROR`。
-- 导航 E2E：`tools\godot_navigation_e2e.gd` exit 0，日志包含 `graph_nodes=7711`、`graph_edges=29986`、`waypoint_count=74`、`total_distance=1148.37562561035`、`status=routing`。
+- 导航 E2E：`tools\godot_navigation_e2e.gd` exit 0，日志包含 `panel_centered=true`、`controls_disabled=true`、`mouse_visible=true`、`graph_nodes=7711`、`graph_edges=29986`、`waypoint_count=74`、`total_distance=1148.37562561035`、`status=routing`。
