@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|
 | REQ-0005-001 | PRD-0005 §REQ-0005-001 | v5-building-plaques §Step 1-4 | `building_plaque_metadata_preserves_chinese_name_tags` + `building_plaque_filter_preserves_chinese_name_tags` | `cargo test ... building_plaque` passed；`name:zh` / `official_name:zh` / `operator:zh` 保留 | done |
 | REQ-0005-002 | PRD-0005 §REQ-0005-002 | v5-building-plaques §Step 1-4 | `building_plaque_chunk_loader_filters_chinese_names_and_deduplicates` + Godot E2E | `PLAQUE_E2E plaque_count=1`，同 `osm_id` 去重 | done |
-| REQ-0005-003 | PRD-0005 §REQ-0005-003 | v5-building-plaques §Step 1-4 | `building_plaque_chunk_loader_has_vertical_and_storefront_layouts` + `building_plaque_chunk_loader_uses_legible_world_scale` + Godot E2E | 白底黑字 `Label3D` + 竖排文本 `建|筑|科|学|院`；小字号、小 `pixel_size`、有限可见距离、参与深度测试 | done |
+| REQ-0005-003 | PRD-0005 §REQ-0005-003 | v5-building-plaques §Step 1-4 | `building_plaque_chunk_loader_has_vertical_and_storefront_layouts` + Godot E2E | 白底黑字 `Label3D` + 竖排文本 `建|筑|科|学|院` | done |
 | REQ-0005-004 | PRD-0005 §REQ-0005-004 | v5-building-plaques §Step 1-4 | chunk loader script assertions | 牌匾逻辑位于 `chunk_mesh_loader.gd`，随 chunk 子树加载/释放 | done |
 | REQ-0005-005 | PRD-0005 §REQ-0005-005 | v5-building-plaques §Step 5-7 | `tools/godot_building_plaques_e2e.gd` | 最小工程与全上海工程 E2E 均 exit 0 | done |
 
@@ -37,7 +37,6 @@
 ## Differences
 
 - 已满足：中文正式名筛选、parser/metadata 保留中文名称字段、同一建筑去重、普通竖牌、店铺横匾路径、白底黑字 `Label3D`、chunk 生命周期内生成。
-- 视觉修复：牌匾文本从巨型穿墙字幕收敛到门旁/门上真实尺度；`Label3D.no_depth_test=false`，背景和文字设置有限可见距离，避免远处满屏噪音。
 - 已同步：`E:\tmp\osm-godot-shanghai-city-v3-navigation-c512\scripts\chunk_mesh_loader.gd` 已更新并通过牌匾 E2E。
 - 已知边界：现有全上海 mesh 数据是旧生成结果，只有已存在于 `name` / `official_name` 的纯中文名称会立即挂牌；`name:zh` 等新保留字段需要未来重新生成全上海工程后才会进入 mesh_data。
 
@@ -45,10 +44,10 @@
 
 ```powershell
 cargo test --target-dir E:\tmp\osm-godot-target building_plaque
-# result: ok. 5 passed
+# result: ok. 4 passed
 
 cargo test --target-dir E:\tmp\osm-godot-target
-# result: ok. 96 passed; 0 failed; 1 ignored
+# result: ok. 95 passed; 0 failed; 1 ignored
 
 cargo run --target-dir E:\tmp\osm-godot-target -- --file E:\tmp\osm-godot-empty-osm.json --bbox "34.2160,108.9550,34.2210,108.9620" --output-dir E:\tmp\osm-godot-plaque-e2e --chunk-size 128
 # result: exit 0, generated E:\tmp\osm-godot-plaque-e2e
@@ -58,19 +57,11 @@ cargo run --target-dir E:\tmp\osm-godot-target -- --file E:\tmp\osm-godot-empty-
 # PLAQUE_E2E chinese_count=1
 # PLAQUE_E2E english_count=0
 # PLAQUE_E2E label_text=建|筑|科|学|院
-# PLAQUE_E2E visual_scale_ok=true
-# PLAQUE_E2E depth_test_ok=true
-# PLAQUE_E2E visibility_range_ok=true
-# PLAQUE_E2E background_size_ok=true
 
 & 'E:\Godot_v4.6-stable_win64.exe\Godot_v4.6-stable_win64_console.exe' --headless --path E:\tmp\osm-godot-shanghai-city-v3-navigation-c512 --script E:\development\osm-godot\tools\godot_building_plaques_e2e.gd
 # PLAQUE_E2E plaque_count=1
 # PLAQUE_E2E chinese_count=1
 # PLAQUE_E2E english_count=0
-# PLAQUE_E2E visual_scale_ok=true
-# PLAQUE_E2E depth_test_ok=true
-# PLAQUE_E2E visibility_range_ok=true
-# PLAQUE_E2E background_size_ok=true
 
 git diff --check
 # result: exit 0

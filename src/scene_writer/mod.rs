@@ -1102,18 +1102,14 @@ func _building_plaque_placement(element: Dictionary, transform: Transform3D, sto
 
 func _create_vertical_building_plaque(osm_id: String, text: String, placement: Dictionary) -> void:
 	var lines: String = _vertical_plaque_text(text)
-	var line_count: int = lines.count("\n") + 1
-	var height: float = clamp(float(line_count) * 0.16 + 0.18, 0.55, 1.8)
-	var vertical_pixel_size: float = clamp(height / max(float(line_count), 1.0) / 58.0, 0.0016, 0.0032)
+	var height: float = clamp(float(lines.count("\n") + 1) * 0.34, 1.1, 3.6)
 	var plaque: Node3D = _new_building_plaque_root(osm_id, text, placement)
-	_add_plaque_surface(plaque, lines, Vector2(0.28, height), vertical_pixel_size)
+	_add_plaque_surface(plaque, lines, Vector2(0.48, height), 0.042)
 
 func _create_storefront_building_plaque(osm_id: String, text: String, placement: Dictionary) -> void:
-	var glyph_count: float = max(float(text.length()), 1.0)
-	var width: float = clamp(glyph_count * 0.15 + 0.3, 0.8, 2.8)
-	var storefront_pixel_size: float = clamp(width / glyph_count / 58.0, 0.0018, 0.0034)
+	var width: float = clamp(float(text.length()) * 0.34, 1.2, 4.8)
 	var plaque: Node3D = _new_building_plaque_root(osm_id, text, placement)
-	_add_plaque_surface(plaque, text, Vector2(width, 0.30), storefront_pixel_size)
+	_add_plaque_surface(plaque, text, Vector2(width, 0.48), 0.038)
 
 func _new_building_plaque_root(osm_id: String, text: String, placement: Dictionary) -> Node3D:
 	var plaque := Node3D.new()
@@ -1142,19 +1138,17 @@ func _add_plaque_surface(plaque: Node3D, text: String, size: Vector2, pixel_size
 	background_material.albedo_color = Color(1, 1, 1, 1)
 	background_material.roughness = 0.85
 	background.material_override = background_material
-	background.visibility_range_end = 70.0
 	plaque.add_child(background)
 	background.owner = plaque.owner
 	var label := Label3D.new()
 	label.name = "PlaqueText"
 	label.text = text
 	label.pixel_size = pixel_size
-	label.font_size = 48
+	label.font_size = 72
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.modulate = Color(0, 0, 0, 1)
-	label.no_depth_test = false
-	label.visibility_range_end = 70.0
+	label.no_depth_test = true
 	label.position = Vector3(0.0, 0.0, 0.015)
 	plaque.add_child(label)
 	label.owner = plaque.owner
@@ -2881,30 +2875,6 @@ mod tests {
         assert!(script.contains("text.split(\"\")"));
         assert!(script.contains("shop"));
         assert!(script.contains("restaurant"));
-    }
-
-    #[test]
-    fn building_plaque_chunk_loader_uses_legible_world_scale() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
-        let ground = Arc::new(Ground::new_flat(0));
-        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
-
-        scene.save_all().unwrap();
-
-        let script =
-            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
-                .unwrap();
-        assert!(script.contains("label.font_size = 48"));
-        assert!(script.contains("label.no_depth_test = false"));
-        assert!(script.contains("label.visibility_range_end = 70.0"));
-        assert!(script.contains("background.visibility_range_end = 70.0"));
-        assert!(script.contains("var vertical_pixel_size: float = clamp("));
-        assert!(script.contains("var storefront_pixel_size: float = clamp("));
-        assert!(!script.contains("label.font_size = 72"));
-        assert!(!script.contains("label.no_depth_test = true"));
-        assert!(!script.contains("0.042"));
-        assert!(!script.contains("0.038"));
     }
 
     #[test]

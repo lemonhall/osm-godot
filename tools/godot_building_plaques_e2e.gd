@@ -47,26 +47,15 @@ func _run() -> void:
 	var has_background := false
 	var has_label := false
 	var label_text := ""
-	var visual_scale_ok := false
-	var depth_test_ok := false
-	var visibility_range_ok := false
-	var background_size_ok := false
 	for plaque in plaques:
 		var text := str(plaque.get_meta("plaque_text", ""))
 		if text == "建筑科学院":
 			chinese_count += 1
-			var background := plaque.get_node_or_null("PlaqueBackground") as MeshInstance3D
-			has_background = background != null
-			if background != null and background.mesh is QuadMesh:
-				var quad := background.mesh as QuadMesh
-				background_size_ok = quad.size.x <= 0.35 and quad.size.y <= 2.0
+			has_background = plaque.get_node_or_null("PlaqueBackground") is MeshInstance3D
 			var label := plaque.get_node_or_null("PlaqueText") as Label3D
 			has_label = label != null
 			if label != null:
 				label_text = label.text
-				visual_scale_ok = label.font_size <= 48 and label.pixel_size < 0.005
-				depth_test_ok = not label.no_depth_test
-				visibility_range_ok = label.visibility_range_end > 0.0 and label.visibility_range_end <= 80.0
 		if text == "Science Building":
 			english_count += 1
 
@@ -76,10 +65,6 @@ func _run() -> void:
 	print("PLAQUE_E2E has_background=", has_background)
 	print("PLAQUE_E2E has_label=", has_label)
 	print("PLAQUE_E2E label_text=", label_text.replace("\n", "|"))
-	print("PLAQUE_E2E visual_scale_ok=", visual_scale_ok)
-	print("PLAQUE_E2E depth_test_ok=", depth_test_ok)
-	print("PLAQUE_E2E visibility_range_ok=", visibility_range_ok)
-	print("PLAQUE_E2E background_size_ok=", background_size_ok)
 
 	var failed := false
 	if plaque_count != 1:
@@ -93,18 +78,6 @@ func _run() -> void:
 		failed = true
 	if not has_background or not has_label:
 		push_error("PLAQUE_E2E plaque missing background or Label3D")
-		failed = true
-	if not visual_scale_ok:
-		push_error("PLAQUE_E2E plaque text scale is too large")
-		failed = true
-	if not depth_test_ok:
-		push_error("PLAQUE_E2E plaque text must respect scene depth")
-		failed = true
-	if not visibility_range_ok:
-		push_error("PLAQUE_E2E plaque should have a finite visibility range")
-		failed = true
-	if not background_size_ok:
-		push_error("PLAQUE_E2E plaque background is not within expected door-scale size")
 		failed = true
 
 	quit(1 if failed else 0)
