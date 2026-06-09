@@ -189,6 +189,26 @@ func _run() -> void:
 		if ui_restart_results <= 0 or not ui_restart_status or ui_restart_waypoints <= 2 or not ribbon_visible_after_ui_restart or not circle_visible_after_ui_restart or ui_route_start_distance > 2.0:
 			push_error("NAV_E2E UI restart navigation failed to redraw route")
 			failed = true
+		var tencent_matches: Array = controller.call("search_destinations", "腾讯华东总部大厦", 1)
+		if tencent_matches.is_empty():
+			push_error("NAV_E2E missing Tencent East China destination")
+			failed = true
+		else:
+			var tencent_entry: Dictionary = tencent_matches[0]
+			var tencent_center: Array = tencent_entry.get("center", [])
+			var tencent_started := bool(controller.call("start_navigation_to_query", "腾讯华东总部大厦"))
+			await process_frame
+			var tencent_destination: Vector3 = controller.get("destination_position")
+			var tencent_target_distance: float = INF
+			if tencent_center.size() >= 2:
+				tencent_target_distance = tencent_destination.distance_to(Vector3(float(tencent_center[0]), tencent_destination.y, float(tencent_center[1])))
+			print("NAV_E2E tencent_started=", tencent_started)
+			print("NAV_E2E tencent_destination=", tencent_destination)
+			print("NAV_E2E tencent_center=", tencent_center)
+			print("NAV_E2E tencent_target_distance=", tencent_target_distance)
+			if not tencent_started or tencent_target_distance > 2.0:
+				push_error("NAV_E2E building route should end at Tencent East China building center")
+				failed = true
 
 	quit(1 if failed else 0)
 

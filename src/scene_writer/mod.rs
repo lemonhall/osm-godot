@@ -1454,8 +1454,9 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 		current_instruction = "Destination has no center"
 		_update_hud()
 		return false
+	var target_position := Vector3(float(center[0]), 0.2, float(center[1]))
 	var start_candidates := _nearest_graph_nodes(player.global_position, 1, 120.0)
-	var goal_candidates := _nearest_graph_nodes(Vector3(float(center[0]), 0.0, float(center[1])), 1, 220.0)
+	var goal_candidates := _nearest_graph_nodes(target_position, 1, 220.0)
 	if start_candidates.is_empty() or goal_candidates.is_empty():
 		navigation_status = "snap_failed"
 		current_instruction = "Could not snap to road"
@@ -1475,11 +1476,14 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 		var first_route_point: Vector3 = route_waypoints[0]
 		if first_route_point.distance_to(player_route_start) > 1.0:
 			route_waypoints.insert(0, player_route_start)
+		var last_route_point: Vector3 = route_waypoints.back()
+		if last_route_point.distance_to(target_position) > 1.0:
+			route_waypoints.append(target_position)
 	_set_auto_run_enabled(false)
 	auto_run_target_index = 1
 	route_total_distance = _route_distance(route_waypoints)
 	destination_name = _entry_display_name(entry)
-	destination_position = route_waypoints.back() as Vector3
+	destination_position = target_position
 	navigation_status = "routing"
 	current_instruction = "沿绿色路线行驶"
 	if instruction_label != null:
@@ -3146,6 +3150,9 @@ mod tests {
         assert!(script.contains("func _make_destination_circle_mesh(radius: float, thickness: float) -> Mesh:"));
         assert!(script.contains("var player_route_start := Vector3(player.global_position.x, 0.2, player.global_position.z)"));
         assert!(script.contains("route_waypoints.insert(0, player_route_start)"));
+        assert!(script.contains("var target_position := Vector3(float(center[0]), 0.2, float(center[1]))"));
+        assert!(script.contains("route_waypoints.append(target_position)"));
+        assert!(script.contains("destination_position = target_position"));
         assert!(!script.contains("TurnMarkers"));
         assert!(!script.contains("func _draw_turn_markers() -> void:"));
         assert!(!script.contains("func _maybe_queue_voice_for_maneuver"));
