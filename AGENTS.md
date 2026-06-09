@@ -83,6 +83,7 @@ Current output model:
 - Chunk `.tscn` files are lightweight loader scenes.
 - Geometry lives in `mesh_data/Chunk_X_Z.json`.
 - `scripts/chunk_mesh_loader.gd` reads chunk JSON on a thread, batches meshes by material and creates metadata markers.
+- `scripts/chunk_mesh_loader.gd` also creates one local Chinese building plaque per eligible building `osm_id`, using only official/local Chinese metadata.
 - `scripts/world_streamer.gd` loads/unloads nearby chunks from `world_manifest.json`.
 - `scripts/navigation_controller.gd` reads local `navigation_index.json` and `navigation_graph.json`; it must not call external routing/search APIs.
 - `scripts/fps_player.gd` provides FPS movement, noclip, control pause/resume and auto-move hooks.
@@ -191,6 +192,7 @@ Known absolute console path used in prior verification:
 - FPS controls include WASD, arrow keys, jump, sprint, mouse capture toggle, descend, noclip, and fallbacks for direct key polling.
 - Navigation controls include `N` panel toggle, green route ribbon, destination circle, local A* graph loading, `G` auto-run and arrival cleanup.
 - Building inspection includes `F`, `BuildingInspectPanel`, view-cone scoring and 5 second auto-hide.
+- Building plaques include white-background black-text `Label3D` plaques for buildings with official Chinese metadata; English-only or unnamed buildings must not receive plaques.
 - Materials should avoid whitebox defaults and use toon-ish settings where supported by Godot 4.6.
 - Terrain/road/building mesh data should exist in `mesh_data/` and be loaded through `chunk_mesh_loader.gd`.
 - Metadata markers should preserve raw `osm_metadata` and sanitized direct meta keys for colon-containing OSM tags.

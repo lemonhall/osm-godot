@@ -828,6 +828,7 @@ var pending_element_index := 0
 var batches := {}
 var batch_keys := []
 var batch_index := 0
+var plaque_building_ids := {}
 
 func _ready() -> void:
 	set_meta("chunk_loading_complete", false)
@@ -852,6 +853,7 @@ func _begin_threaded_load() -> void:
 	batches.clear()
 	batch_keys.clear()
 	batch_index = 0
+	plaque_building_ids.clear()
 	if mesh_data_path.is_empty():
 		_finish_loading()
 		return
@@ -994,6 +996,171 @@ func _add_metadata_marker(element: Dictionary, transform: Transform3D) -> void:
 	_apply_metadata(marker, metadata)
 	add_child(marker)
 	marker.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+	_maybe_add_building_plaque(element, metadata, transform)
+
+func _maybe_add_building_plaque(element: Dictionary, metadata: Dictionary, transform: Transform3D) -> void:
+	if not (metadata.get("osm_kind", "") == "building" or metadata.has("building")):
+		return
+	var osm_id := str(metadata.get("osm_id", ""))
+	if osm_id.is_empty() or plaque_building_ids.has(osm_id):
+		return
+	var text := _building_plaque_text(metadata)
+	if text.is_empty():
+		return
+	plaque_building_ids[osm_id] = true
+	var storefront := _is_storefront_metadata(metadata)
+	var placement := _building_plaque_placement(element, transform, storefront)
+	if storefront:
+		_create_storefront_building_plaque(osm_id, text, placement)
+	else:
+		_create_vertical_building_plaque(osm_id, text, placement)
+
+func _building_plaque_text(metadata: Dictionary) -> String:
+	for key in ["official_name:zh", "official_name:zh-Hans", "official_name:zh-Hant", "name:zh", "name:zh-Hans", "name:zh-Hant", "alt_name:zh", "alt_name:zh-Hans", "alt_name:zh-Hant", "brand:zh", "operator:zh"]:
+		var value := str(metadata.get(key, "")).strip_edges()
+		if _has_cjk(value):
+			return value
+	for key in ["official_name", "name"]:
+		var value := str(metadata.get(key, "")).strip_edges()
+		if _is_formal_chinese_name(value):
+			return value
+	return ""
+
+func _is_formal_chinese_name(text: String) -> bool:
+	return _has_cjk(text) and not _has_latin(text)
+
+func _has_cjk(text: String) -> bool:
+	for i in range(text.length()):
+		var code := text.unicode_at(i)
+		if (code >= 0x3400 and code <= 0x9FFF) or (code >= 0xF900 and code <= 0xFAFF):
+			return true
+	return false
+
+func _has_latin(text: String) -> bool:
+	for i in range(text.length()):
+		var code := text.unicode_at(i)
+		if (code >= 65 and code <= 90) or (code >= 97 and code <= 122):
+			return true
+	return false
+
+func _is_storefront_metadata(metadata: Dictionary) -> bool:
+	var shop := str(metadata.get("shop", ""))
+	if not shop.is_empty():
+		return true
+	var amenity := str(metadata.get("amenity", ""))
+	if amenity in ["restaurant", "cafe", "fast_food", "pharmacy", "bank", "clinic"]:
+		return true
+	var tourism := str(metadata.get("tourism", ""))
+	if tourism == "hotel":
+		return true
+	var building := str(metadata.get("building", ""))
+	return building in ["retail", "commercial", "supermarket", "hotel"]
+
+func _building_plaque_placement(element: Dictionary, transform: Transform3D, storefront: bool) -> Dictionary:
+	var vertices: Array = element.get("vertices", [])
+	if vertices.size() < 3:
+		return {"position": transform.origin + Vector3(0.0, 2.0, -0.2), "normal": Vector3(0.0, 0.0, -1.0)}
+	var has_point := false
+	var min_x := 0.0
+	var max_x := 0.0
+	var min_z := 0.0
+	var max_z := 0.0
+	var max_y := 0.0
+	for i in range(0, vertices.size() - 2, 3):
+		var point := transform * Vector3(float(vertices[i]), float(vertices[i + 1]), float(vertices[i + 2]))
+		if not has_point:
+			min_x = point.x
+			max_x = point.x
+			min_z = point.z
+			max_z = point.z
+			max_y = point.y
+			has_point = true
+		else:
+			min_x = min(min_x, point.x)
+			max_x = max(max_x, point.x)
+			min_z = min(min_z, point.z)
+			max_z = max(max_z, point.z)
+			max_y = max(max_y, point.y)
+	if not has_point:
+		return {"position": transform.origin + Vector3(0.0, 2.0, -0.2), "normal": Vector3(0.0, 0.0, -1.0)}
+	var x_span: float = max(0.1, max_x - min_x)
+	var z_span: float = max(0.1, max_z - min_z)
+	var plaque_y: float = min(max_y - 0.25, 2.8) if storefront else min(max_y - 0.4, 2.2)
+	plaque_y = max(1.2, plaque_y)
+	var normal: Vector3 = Vector3(0.0, 0.0, -1.0)
+	var tangent: Vector3 = Vector3(1.0, 0.0, 0.0)
+	var side_span: float = x_span
+	var position: Vector3 = Vector3((min_x + max_x) * 0.5, plaque_y, min_z - 0.12)
+	if z_span > x_span:
+		normal = Vector3(-1.0, 0.0, 0.0)
+		tangent = Vector3(0.0, 0.0, 1.0)
+		side_span = z_span
+		position = Vector3(min_x - 0.12, plaque_y, (min_z + max_z) * 0.5)
+	if not storefront:
+		position += tangent * max(0.35, side_span * 0.28)
+	return {"position": position, "normal": normal.normalized()}
+
+func _create_vertical_building_plaque(osm_id: String, text: String, placement: Dictionary) -> void:
+	var lines: String = _vertical_plaque_text(text)
+	var height: float = clamp(float(lines.count("\n") + 1) * 0.34, 1.1, 3.6)
+	var plaque: Node3D = _new_building_plaque_root(osm_id, text, placement)
+	_add_plaque_surface(plaque, lines, Vector2(0.48, height), 0.042)
+
+func _create_storefront_building_plaque(osm_id: String, text: String, placement: Dictionary) -> void:
+	var width: float = clamp(float(text.length()) * 0.34, 1.2, 4.8)
+	var plaque: Node3D = _new_building_plaque_root(osm_id, text, placement)
+	_add_plaque_surface(plaque, text, Vector2(width, 0.48), 0.038)
+
+func _new_building_plaque_root(osm_id: String, text: String, placement: Dictionary) -> Node3D:
+	var plaque := Node3D.new()
+	plaque.name = "BuildingPlaque_" + osm_id
+	plaque.position = placement.get("position", Vector3.ZERO)
+	var normal: Vector3 = placement.get("normal", Vector3(0.0, 0.0, -1.0))
+	if normal.length_squared() <= 0.0001:
+		normal = Vector3(0.0, 0.0, -1.0)
+	normal = normal.normalized()
+	plaque.rotation.y = atan2(normal.x, normal.z)
+	plaque.set_meta("osm_generated", true)
+	plaque.set_meta("building_plaque", true)
+	plaque.set_meta("osm_id", osm_id)
+	plaque.set_meta("plaque_text", text)
+	add_child(plaque)
+	plaque.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else owner
+	return plaque
+
+func _add_plaque_surface(plaque: Node3D, text: String, size: Vector2, pixel_size: float) -> void:
+	var background := MeshInstance3D.new()
+	background.name = "PlaqueBackground"
+	var quad := QuadMesh.new()
+	quad.size = size
+	background.mesh = quad
+	var background_material := StandardMaterial3D.new()
+	background_material.albedo_color = Color(1, 1, 1, 1)
+	background_material.roughness = 0.85
+	background.material_override = background_material
+	plaque.add_child(background)
+	background.owner = plaque.owner
+	var label := Label3D.new()
+	label.name = "PlaqueText"
+	label.text = text
+	label.pixel_size = pixel_size
+	label.font_size = 72
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.modulate = Color(0, 0, 0, 1)
+	label.no_depth_test = true
+	label.position = Vector3(0.0, 0.0, 0.015)
+	plaque.add_child(label)
+	label.owner = plaque.owner
+
+func _vertical_plaque_text(text: String) -> String:
+	var chars := text.split("")
+	var lines := PackedStringArray()
+	for ch in chars:
+		var value := str(ch)
+		if not value.is_empty():
+			lines.append(value)
+	return "\n".join(lines)
 
 func _add_collision_body(source_name: String, mesh: ArrayMesh, source_transform: Transform3D) -> void:
 	var body := StaticBody3D.new()
@@ -2661,6 +2828,53 @@ mod tests {
         assert!(script.contains("batch_element_count"));
         assert!(script.contains("PackedVector3Array(batch[\"vertices\"])"));
         assert!(!script.contains("func _add_mesh_instance"));
+    }
+
+    #[test]
+    fn building_plaque_chunk_loader_filters_chinese_names_and_deduplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
+                .unwrap();
+        assert!(script.contains("var plaque_building_ids := {}"));
+        assert!(script.contains("func _maybe_add_building_plaque"));
+        assert!(script.contains("func _building_plaque_text(metadata: Dictionary) -> String:"));
+        assert!(script.contains("func _has_cjk(text: String) -> bool:"));
+        assert!(script.contains("\"official_name:zh\""));
+        assert!(script.contains("\"name:zh\""));
+        assert!(script.contains("metadata.get(\"osm_kind\", \"\") == \"building\""));
+        assert!(script.contains("plaque_building_ids[osm_id] = true"));
+        assert!(script.contains("return \"\""));
+    }
+
+    #[test]
+    fn building_plaque_chunk_loader_has_vertical_and_storefront_layouts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bbox = XZBBox::rect_from_xz_lengths(511.0, 511.0).unwrap();
+        let ground = Arc::new(Ground::new_flat(0));
+        let scene = SceneWriter::new(&bbox, ground, tmp.path().to_path_buf(), 256, 0.5);
+
+        scene.save_all().unwrap();
+
+        let script =
+            std::fs::read_to_string(tmp.path().join("scripts").join("chunk_mesh_loader.gd"))
+                .unwrap();
+        assert!(script.contains("func _create_vertical_building_plaque"));
+        assert!(script.contains("func _create_storefront_building_plaque"));
+        assert!(script.contains("func _is_storefront_metadata(metadata: Dictionary) -> bool:"));
+        assert!(script.contains("Label3D.new()"));
+        assert!(script.contains("QuadMesh.new()"));
+        assert!(script.contains("background_material.albedo_color = Color(1, 1, 1, 1)"));
+        assert!(script.contains("label.modulate = Color(0, 0, 0, 1)"));
+        assert!(script.contains("text.split(\"\")"));
+        assert!(script.contains("shop"));
+        assert!(script.contains("restaurant"));
     }
 
     #[test]

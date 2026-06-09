@@ -56,9 +56,25 @@ const IGNORED_PREFIXES: &[&str] = &[
     "check_date:",
 ];
 
+const PRESERVED_PREFIXED_TAGS: &[&str] = &[
+    "name:zh",
+    "name:zh-Hans",
+    "name:zh-Hant",
+    "official_name:zh",
+    "official_name:zh-Hans",
+    "official_name:zh-Hant",
+    "alt_name:zh",
+    "alt_name:zh-Hans",
+    "alt_name:zh-Hant",
+    "brand:zh",
+    "operator:zh",
+];
+
 fn filter_tags(mut tags: HashMap<String, String>) -> HashMap<String, String> {
     tags.retain(|k, _| {
-        !IGNORED_TAGS.contains(&k.as_str()) && !IGNORED_PREFIXES.iter().any(|p| k.starts_with(p))
+        PRESERVED_PREFIXED_TAGS.contains(&k.as_str())
+            || (!IGNORED_TAGS.contains(&k.as_str())
+                && !IGNORED_PREFIXES.iter().any(|p| k.starts_with(p)))
     });
     tags
 }
@@ -509,4 +525,36 @@ pub fn parse_osm_data_no_outline(
 ) -> (Vec<ProcessedElement>, XZBBox) {
     let (elements, xzbbox, _outline_suppression) = parse_osm_data(osm_data, bbox, scale, debug);
     (elements, xzbbox)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn building_plaque_filter_preserves_chinese_name_tags() {
+        let tags = HashMap::from([
+            ("name".to_string(), "Science Building".to_string()),
+            ("name:zh".to_string(), "建筑科学院".to_string()),
+            ("official_name:zh".to_string(), "中国建筑科学研究院".to_string()),
+            ("operator:zh".to_string(), "某某运营公司".to_string()),
+            ("name:en".to_string(), "Science Building".to_string()),
+            ("operator:en".to_string(), "Example Operator".to_string()),
+            ("building".to_string(), "office".to_string()),
+        ]);
+
+        let filtered = filter_tags(tags);
+
+        assert_eq!(filtered.get("name:zh"), Some(&"建筑科学院".to_string()));
+        assert_eq!(
+            filtered.get("official_name:zh"),
+            Some(&"中国建筑科学研究院".to_string())
+        );
+        assert_eq!(
+            filtered.get("operator:zh"),
+            Some(&"某某运营公司".to_string())
+        );
+        assert!(!filtered.contains_key("name:en"));
+        assert!(!filtered.contains_key("operator:en"));
+    }
 }

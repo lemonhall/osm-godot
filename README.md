@@ -129,6 +129,7 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - **分块 JSON mesh**：chunk `.tscn` 是轻量 loader，几何在 `mesh_data/Chunk_X_Z.json`，运行时用 `ArrayMesh` 批量构建。
 - **本地导航**：生成 `navigation_index.json` 和 `navigation_graph.json`；Godot 运行时用本地 A* 搜索路线。
 - **建筑信息查看**：按 `F` 查看眼前已加载建筑的本地 OSM 名称和关键属性，信息卡约 5 秒后隐藏。
+- **中文门匾**：带正式中文名的建筑会在 chunk 加载时生成白底黑字门匾；普通建筑为门旁竖牌，店铺/服务类为门上横匾；英文名或无名建筑不挂牌。
 
 ## OSM 元数据
 
@@ -136,6 +137,7 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 
 - 原始字典：`node.get_meta("osm_metadata")`
 - 常用字段：`node.get_meta("osm_id")`、`node.get_meta("osm_kind")`、`node.get_meta("name")`
+- 中文名称字段：`name:zh`、`official_name:zh`、`alt_name:zh`、`brand:zh`、`operator:zh`，也兼容 `zh-Hans` / `zh-Hant` 变体
 - 冒号字段会生成安全 key：例如 `addr:housenumber` 可通过 `addr_housenumber` 读取，`building:levels` 可通过 `building_levels` 读取
 - `navigation_index.json` 用于本地目的地搜索；`navigation_graph.json` 用于本地 A* 路径规划
 
@@ -192,6 +194,8 @@ output/
 ```
 
 `chunk_mesh_loader.gd` 在线程中读取/解析 chunk JSON，再按每帧预算把同一 chunk 内的 mesh 合批成少量 `MeshInstance3D`，同时保留道路/建筑 metadata marker。`world_streamer.gd` 通过玩家坐标直接计算 chunk key，用 pending queue 和 `max_concurrent_chunk_loads` 避免跨 chunk 时同步构建多个大块。
+
+建筑牌匾也由 `chunk_mesh_loader.gd` 在 chunk 加载时生成，不写入 `master.tscn`。它只使用本地 metadata：优先 `official_name:zh` / `name:zh`，其次是纯中文 `official_name` / `name`，不会翻译英文名，也不会从 `building` / `amenity` 类别合成假中文名。
 
 ## Godot 漫游控制
 

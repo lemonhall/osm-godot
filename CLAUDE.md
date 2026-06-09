@@ -77,6 +77,7 @@ retrieve_data.rs -> osm_parser.rs -> data_processing.rs
 - `navigation_index.json`：道路/建筑搜索索引。
 - `navigation_graph.json`：本地 A* 路由图。
 - `scripts/chunk_mesh_loader.gd`：线程读取 JSON，按材质合批 `ArrayMesh`，保留 metadata marker。
+- `scripts/chunk_mesh_loader.gd`：对带正式中文 metadata 的建筑生成白底黑字门匾；英文或无名建筑不挂牌。
 - `scripts/world_streamer.gd`：按玩家所在 chunk 加载/卸载附近 chunk。
 - `scripts/navigation_controller.gd`：本地导航、绿色路线带、G 自动巡航、F 键建筑查看。
 - `scripts/fps_player.gd`：FPS 移动、noclip、自动移动和控制暂停 API。
@@ -116,6 +117,6 @@ E2E 脚本：
 
 ## 当前状态与边界
 
-- 已实现：Arnis-style 建筑、runtime chunk streaming、道路/建筑 OSM metadata、本地导航图、导航 UI、G 自动巡航、F 键建筑信息查看。
+- 已实现：Arnis-style 建筑、runtime chunk streaming、道路/建筑 OSM metadata、本地导航图、导航 UI、G 自动巡航、F 键建筑信息查看、建筑中文门匾。
 - 已知边界：`metadata.json` 中地理边界仍是 `save_all()` 写出的占位值；真实定位主要依赖生成命令中的 bbox 与 chunk/scale 元数据。
 - 大范围上海生成是长任务，不要用短超时误判失败。超时后先检查进程和输出目录。
