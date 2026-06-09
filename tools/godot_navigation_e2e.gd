@@ -56,6 +56,10 @@ func _run() -> void:
 	if search_box == null:
 		_fail("missing_search_box")
 		return
+	var result_list: ItemList = controller.get("result_list") as ItemList
+	if result_list == null:
+		_fail("missing_result_list")
+		return
 	search_box.text = "外滩"
 	controller.call("_on_search_changed", search_box.text)
 	await process_frame
@@ -141,6 +145,49 @@ func _run() -> void:
 		print("NAV_E2E hud_hidden_after_arrival=", hud_hidden)
 		if not arrived_status or not cleared_waypoints or not ribbon_hidden or not circle_hidden or not hud_hidden:
 			push_error("NAV_E2E arrival clear failed")
+			failed = true
+		var restarted := bool(controller.call("start_navigation_to_query", "中华艺术宫"))
+		await process_frame
+		var restart_status: bool = str(controller.call("get_navigation_status")) == "routing"
+		var restart_waypoints: int = int(controller.call("get_route_waypoint_count"))
+		var ribbon_visible_after_restart: bool = ribbon != null and ribbon.visible and ribbon.mesh != null
+		var circle_visible_after_restart: bool = destination_circle != null and destination_circle.visible
+		print("NAV_E2E restart_started=", restarted)
+		print("NAV_E2E restart_status=", controller.call("get_navigation_status"))
+		print("NAV_E2E restart_waypoints=", restart_waypoints)
+		print("NAV_E2E ribbon_visible_after_restart=", ribbon_visible_after_restart)
+		print("NAV_E2E circle_visible_after_restart=", circle_visible_after_restart)
+		if not restarted or not restart_status or restart_waypoints <= 2 or not ribbon_visible_after_restart or not circle_visible_after_restart:
+			push_error("NAV_E2E restart navigation failed to redraw route")
+			failed = true
+		player.global_position = Vector3(30058.888671875, 1.8, -35287.02734375)
+		controller.call("_complete_navigation")
+		await process_frame
+		controller.call("_toggle_panel")
+		await process_frame
+		search_box.text = "中华艺术宫"
+		controller.call("_on_search_changed", search_box.text)
+		await process_frame
+		var ui_restart_results: int = result_list.item_count if result_list != null else 0
+		start_button.emit_signal("pressed")
+		await process_frame
+		var ui_restart_status: bool = str(controller.call("get_navigation_status")) == "routing"
+		var ui_restart_waypoints: int = int(controller.call("get_route_waypoint_count"))
+		var ribbon_visible_after_ui_restart: bool = ribbon != null and ribbon.visible and ribbon.mesh != null
+		var circle_visible_after_ui_restart: bool = destination_circle != null and destination_circle.visible
+		var ui_route_waypoints: Array = controller.get("route_waypoints")
+		var ui_route_start_distance: float = INF
+		if not ui_route_waypoints.is_empty():
+			var ui_route_start: Vector3 = ui_route_waypoints[0]
+			ui_route_start_distance = ui_route_start.distance_to(player.global_position)
+		print("NAV_E2E ui_restart_results=", ui_restart_results)
+		print("NAV_E2E ui_restart_status=", controller.call("get_navigation_status"))
+		print("NAV_E2E ui_restart_waypoints=", ui_restart_waypoints)
+		print("NAV_E2E ribbon_visible_after_ui_restart=", ribbon_visible_after_ui_restart)
+		print("NAV_E2E circle_visible_after_ui_restart=", circle_visible_after_ui_restart)
+		print("NAV_E2E ui_route_start_distance=", ui_route_start_distance)
+		if ui_restart_results <= 0 or not ui_restart_status or ui_restart_waypoints <= 2 or not ribbon_visible_after_ui_restart or not circle_visible_after_ui_restart or ui_route_start_distance > 2.0:
+			push_error("NAV_E2E UI restart navigation failed to redraw route")
 			failed = true
 
 	quit(1 if failed else 0)

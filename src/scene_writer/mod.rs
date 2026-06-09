@@ -1470,6 +1470,11 @@ func _start_navigation_to_entry(entry: Dictionary) -> bool:
 	route_waypoints.clear()
 	for node_index in node_path:
 		route_waypoints.append(node_positions_array[int(node_index)])
+	var player_route_start := Vector3(player.global_position.x, 0.2, player.global_position.z)
+	if not route_waypoints.is_empty():
+		var first_route_point: Vector3 = route_waypoints[0]
+		if first_route_point.distance_to(player_route_start) > 1.0:
+			route_waypoints.insert(0, player_route_start)
 	_set_auto_run_enabled(false)
 	auto_run_target_index = 1
 	route_total_distance = _route_distance(route_waypoints)
@@ -3139,6 +3144,8 @@ mod tests {
         assert!(script.contains("destination_circle.name = \"DestinationCircle\""));
         assert!(script.contains("func _draw_destination_circle() -> void:"));
         assert!(script.contains("func _make_destination_circle_mesh(radius: float, thickness: float) -> Mesh:"));
+        assert!(script.contains("var player_route_start := Vector3(player.global_position.x, 0.2, player.global_position.z)"));
+        assert!(script.contains("route_waypoints.insert(0, player_route_start)"));
         assert!(!script.contains("TurnMarkers"));
         assert!(!script.contains("func _draw_turn_markers() -> void:"));
         assert!(!script.contains("func _maybe_queue_voice_for_maneuver"));
