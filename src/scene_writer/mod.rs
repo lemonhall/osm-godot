@@ -2191,7 +2191,7 @@ func _update_hud() -> void:
 @export var player_path: NodePath = NodePath("../Player")
 @export var stream_radius := {stream_radius}
 @export var unload_radius := {unload_radius}
-@export var max_concurrent_chunk_loads := 2
+@export var max_concurrent_chunk_loads := 1
 
 var manifest := {{}}
 var chunk_entries := {{}}
