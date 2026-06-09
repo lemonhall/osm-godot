@@ -57,16 +57,16 @@
 
 ## Steps
 
-1. **Red classification**：新增 vegetation 分类测试，运行 `cargo test --target-dir E:\tmp\osm-godot-target vegetation`，预期因缺少 processor/分类函数失败。
-2. **Red output**：新增 scene 写入测试，断言 vegetation ground mesh 和具体植被实例存在，预期失败。
-3. **Red tree profiles**：新增树形 profile 测试，断言 broadleaf/conifer/shrub 三类 profile，预期失败。
-4. **Green processor**：新增 `vegetation.rs`，实现 OSM 标签分类、polygon ground patch、确定性撒布与数量上限。
-5. **Green tree profiles**：重构 `trees.rs`，保留 `natural=tree` 路径，同时引入多 profile mesh 和稳定尺寸扰动。
-6. **Green verify**：运行 `cargo test --target-dir E:\tmp\osm-godot-target vegetation`，预期通过。
-7. **E2E sample**：创建本地最小 OSM JSON 样本，生成 `E:\tmp\osm-godot-vegetation-v6-e2e`。
-8. **Godot E2E**：运行 `tools\godot_vegetation_e2e.gd`，断言 mesh_data/运行时节点包含 vegetation 输出，并让 player 自动移动约 500m，记录 `walk_distance`、`avg_fps`、`min_fps`。
-9. **Regression**：运行 `cargo test --target-dir E:\tmp\osm-godot-target`、`git diff --check`、乱码扫描。
-10. **Review/Ship**：回写 v6 evidence 和差异，必要时更新 README/AGENTS，commit + push。
+1. **Red classification**：新增 vegetation 分类测试，运行 `cargo test --target-dir E:\tmp\osm-godot-target vegetation`，预期因缺少 processor/分类函数失败。状态：done。
+2. **Red output**：新增 scene 写入测试，断言 vegetation ground mesh 和具体植被实例存在，预期失败。状态：done。
+3. **Red tree profiles**：新增树形 profile 测试，断言 broadleaf/conifer/shrub 三类 profile，预期失败。状态：done。
+4. **Green processor**：新增 `vegetation.rs`，实现 OSM 标签分类、polygon ground patch、确定性撒布与数量上限。状态：done。
+5. **Green tree profiles**：重构 `trees.rs`，保留 `natural=tree` 路径，同时引入多 profile mesh 和稳定尺寸扰动。状态：done。
+6. **Green verify**：运行 `cargo test --target-dir E:\tmp\osm-godot-target vegetation`，预期通过。状态：done。
+7. **E2E sample**：创建本地最小 OSM JSON 样本，生成 `E:\tmp\osm-godot-vegetation-v6-e2e`。状态：done。
+8. **Godot E2E**：运行 `tools\godot_vegetation_e2e.gd`，断言 mesh_data/运行时节点包含 vegetation 输出，并让 player 自动移动约 500m，记录 `walk_distance`、`avg_fps`、`min_fps`。状态：done。
+9. **Regression**：运行 `cargo test --target-dir E:\tmp\osm-godot-target`、`git diff --check`、乱码扫描。状态：done。
+10. **Review/Ship**：回写 v6 evidence 和差异，必要时更新 README/AGENTS，commit + push。状态：done。
 
 ## Risks
 

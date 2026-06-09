@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-osm-godot 是一个 Rust CLI 工具，用 OpenStreetMap 数据、可选卫星高程和 ESA WorldCover 地表分类生成 Godot 4.6 3D 城市场景工程。输出模型已经从静态全量场景演进为 runtime streaming world package：Godot 主场景只挂环境、玩家、streamer 和导航控制器，chunk 几何在 `mesh_data/*.json` 中按需加载。
+osm-godot 是一个 Rust CLI 工具，用 OpenStreetMap 数据、可选卫星高程和 ESA WorldCover 地表分类生成 Godot 4.6 3D 城市场景工程。输出模型已经从静态全量场景演进为 runtime streaming world package：Godot 主场景只挂环境、玩家、streamer 和导航控制器，chunk 几何在 `mesh_data/*.json` 中按需加载。OSM 面状绿地会生成 vegetation ground patch，并确定性撒布多形态树木/灌木。
 
 参考实现位于 `refs/arnis/`。它把 OSM 转为 Minecraft 世界；本项目复用输入/解析思路，但输出为 Godot `project.godot`、`.tscn`、`.tres`、GDScript、JSON mesh 数据和本地导航数据。
 
@@ -17,6 +17,7 @@ osm-godot 是一个 Rust CLI 工具，用 OpenStreetMap 数据、可选卫星高
 - Test scene writer: `cargo test --target-dir E:\tmp\osm-godot-target scene_writer -- --nocapture`
 - Test navigation: `cargo test --target-dir E:\tmp\osm-godot-target navigation -- --nocapture`
 - Test building inspection: `cargo test --target-dir E:\tmp\osm-godot-target building_inspection`
+- Test vegetation: `cargo test --target-dir E:\tmp\osm-godot-target vegetation`
 - Diff check: `git diff --check`
 - Generate small Xi'an sample from cached OSM:
   `cargo run --target-dir E:\tmp\osm-godot-target -- --file E:\tmp\osm-godot-xian-yanta-style-osm.json --bbox "34.2160,108.9550,34.2210,108.9620" --output-dir E:\tmp\osm-godot-xian-yanta-style-vN --chunk-size 128`
@@ -44,7 +45,7 @@ retrieve_data.rs -> osm_parser.rs -> Vec<ProcessedElement>
                                   |
       +---------------------------+---------------------------+
       v                           v                           v
-element_processing/buildings.rs  highways.rs              water/trees/rail
+element_processing/buildings.rs  highways.rs       water/trees/vegetation/rail
       +---------------------------+---------------------------+
                                   v
                            scene_writer/mod.rs
@@ -68,6 +69,8 @@ Important modules:
 - `src/element_processing/`: OSM element to scene mesh conversion.
 - `src/element_processing/buildings.rs`: Arnis-style building classification, materials, roofs, facade details.
 - `src/element_processing/highways.rs`: road surfaces and navigation graph centerline input.
+- `src/element_processing/vegetation.rs`: OSM closed green areas to vegetation ground patch plus capped deterministic tree/shrub scatter.
+- `src/element_processing/trees.rs`: varied broadleaf/conifer/shrub profile generation for `natural=tree` and vegetation scatter.
 - `src/ground_generation.rs`: terrain mesh generation.
 - `src/scene_writer/mod.rs`: top-level Godot output orchestration, master scene, runtime scripts, manifests, navigation data.
 - `src/scene_writer/chunk_grid.rs`: chunk partitioning and scene element storage.
@@ -75,14 +78,15 @@ Important modules:
 - `src/scene_writer/tres_writer.rs`: Godot material `.tres` writing.
 - `src/scene_writer/project_writer.rs`: `project.godot`, default environment and `metadata.json`.
 - `src/scene_writer/navigation.rs`: lightweight offline navigation graph generation.
-- `tools/*.gd`: Godot 4.6 headless E2E probes for player, streaming, navigation, autorun, building inspection.
-- `docs/prd/` and `docs/plan/`: versioned PRD/plan/evidence chain for v1-v4.
+- `tools/*.gd`: Godot 4.6 headless E2E probes for player, streaming, navigation, autorun, building inspection, building plaques and vegetation FPS.
+- `docs/prd/` and `docs/plan/`: versioned PRD/plan/evidence chain for v1-v6.
 
 Current output model:
 
 - Chunk `.tscn` files are lightweight loader scenes.
 - Geometry lives in `mesh_data/Chunk_X_Z.json`.
 - `scripts/chunk_mesh_loader.gd` reads chunk JSON on a thread, batches meshes by material and creates metadata markers.
+- Vegetation area metadata markers use `osm_kind=vegetation` and `vegetation_kind`; scattered vegetation instances are baked into chunk mesh data and batched by material at runtime.
 - `scripts/chunk_mesh_loader.gd` also creates one local Chinese building plaque per eligible building `osm_id`, using only official/local Chinese metadata.
 - `scripts/world_streamer.gd` loads/unloads nearby chunks from `world_manifest.json`.
 - `scripts/navigation_controller.gd` reads local `navigation_index.json` and `navigation_graph.json`; it must not call external routing/search APIs.

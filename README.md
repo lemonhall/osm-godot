@@ -2,11 +2,11 @@
 
 **从真实世界地理数据生成 Godot Engine 4.6 流式 3D 城市场景**
 
-osm-godot 是一个 Rust 命令行工具，将 [OpenStreetMap](https://www.openstreetmap.org/) 矢量数据、可选卫星高程数据和 ESA 地表分类转换为可直接打开的 Godot 4.6 项目。生成结果包含分块 mesh 数据、运行时 chunk streaming、Arnis-style 建筑外观、本地导航索引/路网、FPS 漫游玩家、天空光照、离线路线指引和建筑信息查看。
+osm-godot 是一个 Rust 命令行工具，将 [OpenStreetMap](https://www.openstreetmap.org/) 矢量数据、可选卫星高程数据和 ESA 地表分类转换为可直接打开的 Godot 4.6 项目。生成结果包含分块 mesh 数据、运行时 chunk streaming、Arnis-style 建筑外观、OSM 绿地/植被生成、本地导航索引/路网、FPS 漫游玩家、天空光照、离线路线指引和建筑信息查看。
 
 本项目灵感来源于 [Arnis](https://github.com/louis-e/arnis)：复用 OSM/高程/地表分类输入思路，但输出目标是 Godot `project.godot`、`.tscn`、`.tres`、GDScript 和 JSON mesh 数据。
 
-> 当前状态：v1-v4 能力已落地。仓库测试记录显示 `cargo test --target-dir E:\tmp\osm-godot-target` 最近为 91 passed / 1 ignored；大范围上海项目、外滩 streaming、离线导航和 F 键建筑查看均有 Godot 4.6 headless E2E 验证记录。
+> 当前状态：v1-v6 能力已落地。仓库测试记录显示 `cargo test --target-dir E:\tmp\osm-godot-target` 最近为 99 passed / 1 ignored；大范围上海项目、外滩 streaming、离线导航、F 键建筑查看、中文门匾和 OSM 植被样本均有 Godot 4.6 headless E2E 验证记录。
 
 ## 工作原理
 
@@ -14,7 +14,7 @@ osm-godot 是一个 Rust 命令行工具，将 [OpenStreetMap](https://www.opens
 经纬度 bbox / 本地 OSM JSON
         |
         v
-OpenStreetMap 数据 -> 建筑、道路、铁路、树木、水域、名称、地址、类别标签
+OpenStreetMap 数据 -> 建筑、道路、铁路、水域、树木、面状绿地、名称、地址、类别标签
         +
 可选卫星高程数据 -> 地形高度
         +
@@ -124,22 +124,24 @@ $env:HTTP_PROXY='http://127.0.0.1:7897'; $env:HTTPS_PROXY='http://127.0.0.1:7897
 - **Arnis-style 建筑**：按 OSM 标签推断住宅、办公、酒店、工业、仓库、学校、医院、宗教、历史、高层、温室等建筑类别。
 - **材质与颜色**：优先读取 `building:material`、`building:colour`、`roof:material`、`roof:colour`，再回退到类别预设材质。
 - **屋顶与立面**：支持 `flat`、`gabled`、`hipped`、`skillion`、`pyramidal` 等屋顶；生成窗、门、阳台、横带、檐口、扶壁、玻璃幕墙、屋顶设备等细节。
-- **道路/铁路/水域/树木**：道路按宽度生成带状 mesh，铁路和水域随 chunk 输出，树木来自 `natural=tree` 节点。
+- **道路/铁路/水域/植被**：道路按宽度生成带状 mesh，铁路和水域随 chunk 输出；`natural=tree` 节点生成多形态树/灌木，`landuse=forest/grass/meadow`、`natural=wood/scrub/grassland`、`leisure=park/garden` 等闭合面会生成绿地 patch 并确定性撒布树木和灌木。
 - **运行时 streaming**：`world_streamer.gd` 根据玩家位置加载/卸载 chunk，不再让 `master.tscn` 静态引用所有 chunk。
 - **分块 JSON mesh**：chunk `.tscn` 是轻量 loader，几何在 `mesh_data/Chunk_X_Z.json`，运行时用 `ArrayMesh` 批量构建。
 - **本地导航**：生成 `navigation_index.json` 和 `navigation_graph.json`；Godot 运行时用本地 A* 搜索路线。
 - **建筑信息查看**：按 `F` 查看眼前已加载建筑的本地 OSM 名称和关键属性，信息卡约 5 秒后隐藏。
 - **中文门匾**：带正式中文名的建筑会在 chunk 加载时生成白底黑字门匾；普通建筑为门旁竖牌，店铺/服务类为门上横匾；英文名或无名建筑不挂牌。
+- **OSM 植被**：面状绿地生成 `VegetationGround_*` patch，按 OSM id 稳定撒布 `VegetationTree_*`、`VegetationConifer_*`、`VegetationShrub_*`，并用 E2E 覆盖 500m player 巡航 FPS。
 
 ## OSM 元数据
 
-建筑和道路会把有限 OSM 元数据写入 `mesh_data/*.json`，Godot chunk loader 加载后挂到 metadata marker 上：
+建筑、道路和绿地会把有限 OSM 元数据写入 `mesh_data/*.json`，Godot chunk loader 加载后挂到 metadata marker 上：
 
 - 原始字典：`node.get_meta("osm_metadata")`
 - 常用字段：`node.get_meta("osm_id")`、`node.get_meta("osm_kind")`、`node.get_meta("name")`
 - 中文名称字段：`name:zh`、`official_name:zh`、`alt_name:zh`、`brand:zh`、`operator:zh`，也兼容 `zh-Hans` / `zh-Hant` 变体
 - 冒号字段会生成安全 key：例如 `addr:housenumber` 可通过 `addr_housenumber` 读取，`building:levels` 可通过 `building_levels` 读取
 - `navigation_index.json` 用于本地目的地搜索；`navigation_graph.json` 用于本地 A* 路径规划
+- 绿地 marker 使用 `osm_kind=vegetation`，并包含 `vegetation_kind`（如 `woodland`、`park`、`grass`、`scrub`）
 
 ## 参数说明
 

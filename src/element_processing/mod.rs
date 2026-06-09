@@ -7,6 +7,7 @@ pub mod buildings;
 pub mod highways;
 pub mod railways;
 pub mod trees;
+pub mod vegetation;
 pub mod water_areas;
 pub mod waterways;
 
@@ -34,6 +35,9 @@ const METADATA_KEYS: &[&str] = &[
     "roof:material",
     "roof:colour",
     "highway",
+    "landuse",
+    "natural",
+    "leisure",
     "amenity",
     "shop",
     "tourism",
@@ -68,7 +72,10 @@ mod tests {
         let tags = HashMap::from([
             ("name".to_string(), "Science Building".to_string()),
             ("name:zh".to_string(), "建筑科学院".to_string()),
-            ("official_name:zh".to_string(), "中国建筑科学研究院".to_string()),
+            (
+                "official_name:zh".to_string(),
+                "中国建筑科学研究院".to_string(),
+            ),
             ("brand:zh".to_string(), "便利蜂".to_string()),
             ("operator:zh".to_string(), "某某运营公司".to_string()),
             ("building".to_string(), "commercial".to_string()),
@@ -82,6 +89,9 @@ mod tests {
             Some(&"中国建筑科学研究院".to_string())
         );
         assert_eq!(metadata.get("brand:zh"), Some(&"便利蜂".to_string()));
-        assert_eq!(metadata.get("operator:zh"), Some(&"某某运营公司".to_string()));
+        assert_eq!(
+            metadata.get("operator:zh"),
+            Some(&"某某运营公司".to_string())
+        );
     }
 }

@@ -1,39 +1,133 @@
-//! Tree element processor — places 3D tree meshes at OSM node positions.
+//! Tree element processor — places varied low-poly vegetation meshes at OSM tree nodes.
 
 use crate::osm_parser::ProcessedNode;
 use crate::scene_writer::geometry;
+use crate::scene_writer::geometry::MeshData;
 use crate::scene_writer::tres_writer::MaterialType;
 use crate::scene_writer::SceneWriter;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VegetationProfile {
+    Broadleaf,
+    Conifer,
+    Shrub,
+}
+
 /// Generate a tree at a node position.
-pub fn generate_tree(
+pub fn generate_tree(scene: &mut SceneWriter, node: &ProcessedNode) {
+    let profile = profile_for_id(node.id);
+    generate_profile_instance(scene, node.id, profile, node.x, node.z);
+}
+
+pub fn generate_profile_instance(
     scene: &mut SceneWriter,
-    node: &ProcessedNode,
+    seed: u64,
+    profile: VegetationProfile,
+    world_x: i32,
+    world_z: i32,
 ) {
-    let world_x = node.x;
-    let world_z = node.z;
+    let rotation = unit_hash(seed ^ 0x8f3d_2a91) * std::f32::consts::TAU;
+    let scale = 0.85 + unit_hash(seed ^ 0x51ab_c309) * 0.45;
 
-    // Tree parameters (scale with godot_scale, but keep proportional)
-    let trunk_radius = 0.3;
-    let trunk_height = 2.5;
-    let canopy_radius = 1.5;
+    match profile {
+        VegetationProfile::Broadleaf => {
+            let trunk_height = 2.1 * scale;
+            let trunk = geometry::make_cylinder(0.22 * scale, trunk_height, 7);
+            scene.add_instance(
+                format!("VegetationTrunk_{seed}"),
+                trunk,
+                MaterialType::TreeTrunk,
+                world_x,
+                world_z,
+                rotation,
+            );
 
-    // Trunk mesh (local coords at origin)
-    let trunk = geometry::make_cylinder(trunk_radius, trunk_height, 8);
+            let crown = offset_mesh(
+                geometry::make_cylinder(1.25 * scale, 1.45 * scale, 10),
+                0.0,
+                trunk_height,
+                0.0,
+            );
+            scene.add_instance(
+                format!("VegetationTree_{seed}"),
+                crown,
+                MaterialType::TreeLeaves,
+                world_x,
+                world_z,
+                rotation,
+            );
+        }
+        VegetationProfile::Conifer => {
+            let trunk_height = 1.25 * scale;
+            let trunk = geometry::make_cylinder(0.18 * scale, trunk_height, 6);
+            scene.add_instance(
+                format!("VegetationTrunk_{seed}"),
+                trunk,
+                MaterialType::TreeTrunk,
+                world_x,
+                world_z,
+                rotation,
+            );
 
-    // Canopy mesh (offset upward by trunk height)
-    let canopy = geometry::make_cone(canopy_radius, canopy_radius * 3.0, 8);
-    let mut canopy_pos = canopy;
-    // Offset canopy vertices up (TODO: make a proper append_with_offset)
-    let vertex_count = canopy_pos.vertices.len() / 3;
-    for i in 0..vertex_count {
-        canopy_pos.vertices[i * 3 + 1] += trunk_height; // Y offset
+            let crown = offset_mesh(
+                geometry::make_cone(1.15 * scale, 3.6 * scale, 9),
+                0.0,
+                trunk_height * 0.45,
+                0.0,
+            );
+            scene.add_instance(
+                format!("VegetationConifer_{seed}"),
+                crown,
+                MaterialType::TreeLeaves,
+                world_x,
+                world_z,
+                rotation,
+            );
+        }
+        VegetationProfile::Shrub => {
+            let shrub = offset_mesh(
+                geometry::make_cylinder(0.95 * scale, 0.85 * scale, 8),
+                0.0,
+                0.08,
+                0.0,
+            );
+            scene.add_instance(
+                format!("VegetationShrub_{seed}"),
+                shrub,
+                MaterialType::TreeLeaves,
+                world_x,
+                world_z,
+                rotation,
+            );
+        }
     }
+}
 
-    // Combine trunk + canopy into one mesh
-    let mut tree_mesh = trunk;
-    tree_mesh.append(&canopy_pos, (0.0, 0.0, 0.0));
+pub fn profile_for_id(id: u64) -> VegetationProfile {
+    match stable_hash(id) % 3 {
+        0 => VegetationProfile::Broadleaf,
+        1 => VegetationProfile::Conifer,
+        _ => VegetationProfile::Shrub,
+    }
+}
 
-    let name = format!("Tree_{}", node.id);
-    scene.add_mesh(name, tree_mesh, MaterialType::TreeTrunk, world_x, world_z);
+fn offset_mesh(mut mesh: MeshData, x: f32, y: f32, z: f32) -> MeshData {
+    for vertex in mesh.vertices.chunks_exact_mut(3) {
+        vertex[0] += x;
+        vertex[1] += y;
+        vertex[2] += z;
+    }
+    mesh
+}
+
+pub(crate) fn stable_hash(value: u64) -> u64 {
+    let mut x = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+pub(crate) fn unit_hash(value: u64) -> f32 {
+    let bits = (stable_hash(value) >> 40) as u32;
+    bits as f32 / 16_777_215.0
 }
